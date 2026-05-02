@@ -44,23 +44,22 @@ body {
   transition: opacity .5s ease, transform .5s ease;
 }
 #splash.fade-out { opacity: 0; transform: scale(1.04); pointer-events: none; }
-.splash-inner { text-align: center; animation: splashPop .8s ease; }
-.splash-cross {
-  font-size: 3rem; color: var(--gold); display: block;
-  filter: drop-shadow(0 0 24px var(--gold));
-  animation: glowPulse 2s infinite;
-}
-.splash-title {
-  font-family: 'Bebas Neue', sans-serif;
-  font-size: 6rem; color: var(--gold); line-height: .9;
-  text-shadow: 0 0 40px rgba(245,200,66,.6); letter-spacing: .1em;
+.splash-inner { text-align: center; animation: splashPop .9s cubic-bezier(.34,1.56,.64,1); }
+.splash-logo {
+  width: 200px; height: 200px;
+  object-fit: contain;
+  display: block; margin: 0 auto 1.2rem;
+  filter: drop-shadow(0 0 32px rgba(245,200,66,.5));
+  animation: splashFloat 3s ease-in-out infinite;
 }
 .splash-sub {
-  font-size: 1.4rem; color: var(--accent2);
-  letter-spacing: .5em; text-transform: uppercase; font-weight: 900;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.35rem; color: var(--gold);
+  letter-spacing: .35em; text-transform: uppercase;
+  text-shadow: 0 0 20px rgba(245,200,66,.5);
 }
-@keyframes splashPop  { from{transform:scale(.8);opacity:0} to{transform:scale(1);opacity:1} }
-@keyframes glowPulse  { 0%,100%{filter:drop-shadow(0 0 16px var(--gold))}50%{filter:drop-shadow(0 0 40px var(--gold))} }
+@keyframes splashPop   { from{transform:scale(.7);opacity:0} to{transform:scale(1);opacity:1} }
+@keyframes splashFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
 
 /* ── HEADER ── */
 .app-header {
@@ -71,7 +70,7 @@ body {
   backdrop-filter: blur(16px);
 }
 .header-left { display: flex; align-items: center; gap: .5rem; }
-.header-cross { color: var(--gold); font-size: 1.2rem; }
+.header-logo { width: 30px; height: 30px; object-fit: contain; }
 .header-title { font-family:'Bebas Neue',sans-serif; font-size:1.5rem; letter-spacing:.08em; }
 .header-title span { color: var(--gold); }
 .header-right { display: flex; gap: .4rem; }
