@@ -4,8 +4,8 @@
 ═══════════════════════════════════════════════════ */
 
 // ─── CONFIGURE SEU SUPABASE AQUI ────────────────────
-const SUPABASE_URL = 'https://SEU_PROJECT.supabase.co';
-const SUPABASE_KEY = 'SUA_ANON_KEY';
+const SUPABASE_URL = 'https://jjpkrdwisfvgdmlprjey.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpqcGtyZHdpc2Z2Z2RtbHByamV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU3Nzk0OTMsImV4cCI6MjA5MTM1NTQ5M30.Lt1-J6FlC9pIFJ7QHq3WTzkItYJAiaEcjOm7F_726Fw';
 // ────────────────────────────────────────────────────
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
