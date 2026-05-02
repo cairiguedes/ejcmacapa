@@ -41,7 +41,7 @@ body {
   position: fixed; inset: 0; z-index: 9999;
   background: radial-gradient(ellipse at 50% 30%, #3b0764 0%, #0f0221 70%);
   display: flex; align-items: center; justify-content: center;
-  transition: opacity .5s ease, transform .5s ease;
+  transition: opacity .8s ease, transform .8s ease;
 }
 #splash.fade-out { opacity: 0; transform: scale(1.04); pointer-events: none; }
 .splash-inner { text-align: center; animation: splashPop .9s cubic-bezier(.34,1.56,.64,1); }
@@ -50,7 +50,7 @@ body {
   object-fit: contain;
   display: block; margin: 0 auto 1.2rem;
   filter: drop-shadow(0 0 32px rgba(245,200,66,.5));
-  animation: splashFloat 5s ease-in-out infinite;
+  animation: splashFloat 8s ease-in-out infinite;
 }
 .splash-sub {
   font-family: 'Bebas Neue', sans-serif;
