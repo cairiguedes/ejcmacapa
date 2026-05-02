@@ -4,8 +4,8 @@
 ═══════════════════════════════════════════════════ */
 
 // ─── CONFIGURE SEU SUPABASE AQUI ────────────────────
-const SUPABASE_URL = 'https://ghcishjqgycpflwgaxwv.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdoY2lzaGpxZ3ljcGZsd2dheHd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2NTQwNzYsImV4cCI6MjA5MzIzMDA3Nn0.YHx6ZLj3yQm1Hul_bzbMXVJjnB1ebZ4Z3YRrlg5vyOE';
+const SUPABASE_URL = 'https://SEU_PROJECT.supabase.co';
+const SUPABASE_KEY = 'SUA_ANON_KEY';
 // ────────────────────────────────────────────────────
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -940,17 +940,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Modal score ──
   const openScoreModal = () => {
-    document.getElementById('score-pts').value='';
-    document.getElementById('score-desc').value='';
-    document.getElementById('score-date').value=today();
-    document.getElementById('score-team').value='';
-    document.getElementById('score-gin').value='';
-    document.querySelectorAll('#modal-score .qpt').forEach(b=>b.classList.remove('selected'));
-    clearTimeInputs('score-time-min','score-time-sec','score-time-ms');
+    // Limpa TUDO antes de abrir — garante que não sobra nada da sessão anterior
+    document.getElementById('score-pts').value  = '';
+    document.getElementById('score-desc').value = '';
+    document.getElementById('score-date').value = today();
+    document.getElementById('score-team').value = '';
+    document.getElementById('score-gin').value  = '';
+    document.querySelectorAll('#modal-score .qpt').forEach(b => b.classList.remove('selected'));
+    // Limpa os três campos de tempo explicitamente
+    document.getElementById('score-time-min').value = '';
+    document.getElementById('score-time-sec').value = '';
+    document.getElementById('score-time-ms').value  = '';
     openModal('modal-score');
   };
-  document.getElementById('btn-header-score').addEventListener('click',openScoreModal);
-  document.getElementById('fab-score').addEventListener('click',openScoreModal);
+  document.getElementById('btn-header-score').addEventListener('click', openScoreModal);
+  document.getElementById('fab-score').addEventListener('click', openScoreModal);
 
   // ── Modal punição ──
   const openPunModal = () => {
@@ -965,10 +969,30 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('fab-punishment').addEventListener('click',openPunModal);
 
   // ── Fechar modais ──
-  document.querySelectorAll('[data-close]').forEach(btn=>
-    btn.addEventListener('click',()=>closeModal(btn.dataset.close)));
-  document.querySelectorAll('.modal').forEach(m=>
-    m.addEventListener('click',e=>{ if(e.target===m) closeModal(m.id); }));
+  document.querySelectorAll('[data-close]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.close;
+      closeModal(id);
+      // Garante limpeza dos campos de tempo ao fechar score modal
+      if (id === 'modal-score') {
+        document.getElementById('score-time-min').value = '';
+        document.getElementById('score-time-sec').value = '';
+        document.getElementById('score-time-ms').value  = '';
+      }
+    })
+  );
+  document.querySelectorAll('.modal').forEach(m =>
+    m.addEventListener('click', e => {
+      if (e.target === m) {
+        closeModal(m.id);
+        if (m.id === 'modal-score') {
+          document.getElementById('score-time-min').value = '';
+          document.getElementById('score-time-sec').value = '';
+          document.getElementById('score-time-ms').value  = '';
+        }
+      }
+    })
+  );
 
   // ── Confirm OK ──
   document.getElementById('btn-confirm-ok').addEventListener('click',()=>{

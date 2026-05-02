@@ -538,30 +538,50 @@ body {
 
 /* ── TIME INPUT ── */
 .time-input-row {
-  display: flex; align-items: center; gap: .35rem;
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .4rem .6rem;
+  transition: border-color .2s;
 }
+.time-input-row:focus-within { border-color: var(--gold); }
 .time-field {
-  display: flex; flex-direction: column; align-items: center; gap: .2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .15rem;
   flex: 1;
 }
 .time-field input {
-  background: var(--card2); border: 1px solid var(--border);
-  color: var(--text); border-radius: var(--radius-sm);
-  padding: .6rem .4rem; font-family: 'Bebas Neue', sans-serif;
-  font-size: 1.25rem; text-align: center; width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.6rem;
+  text-align: center;
+  width: 100%;
+  padding: .1rem 0;
   letter-spacing: .05em;
+  outline: none;
 }
-.time-field input:focus { outline: none; border-color: var(--gold); }
-.time-field input::placeholder { color: var(--muted); opacity: .5; }
+.time-field input::placeholder { color: var(--muted); opacity: .4; }
 .time-label {
-  font-size: .62rem; font-weight: 900; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .06em;
+  font-size: .6rem;
+  font-weight: 900;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .08em;
 }
 .time-sep {
   font-family: 'Bebas Neue', sans-serif;
-  font-size: 1.4rem; color: var(--muted);
-  padding-bottom: 1.1rem; /* alinha com o input */
+  font-size: 1.6rem;
+  color: var(--muted);
+  padding: 0 .1rem .9rem;
   flex-shrink: 0;
+  line-height: 1;
 }
 
 /* ── HISTORY TIME BADGE ── */
