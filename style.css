@@ -41,7 +41,7 @@ body {
   position: fixed; inset: 0; z-index: 9999;
   background: radial-gradient(ellipse at 50% 30%, #3b0764 0%, #0f0221 70%);
   display: flex; align-items: center; justify-content: center;
-  transition: opacity .10s ease, transform .10s ease;
+  transition: opacity .5s ease, transform .5s ease;
 }
 #splash.fade-out { opacity: 0; transform: scale(1.04); pointer-events: none; }
 .splash-inner { text-align: center; animation: splashPop .9s cubic-bezier(.34,1.56,.64,1); }
