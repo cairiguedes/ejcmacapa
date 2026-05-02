@@ -33,7 +33,7 @@
   <header class="app-header">
     <div class="header-left">
       <img src="icon-192.png" alt="EJC" class="header-logo" />
-      <span class="header-title">EJC <span>MACAPÁ</span></span>
+      <span class="header-title">EJC <span>GINCANA</span></span>
     </div>
     <div class="header-right">
       <button class="icon-btn" id="btn-header-score" title="Lançar Pontos">⚡</button>
@@ -97,6 +97,7 @@
     <button class="tab" data-tab="ranking">🏆 Ranking</button>
     <button class="tab" data-tab="charts">📊 Gráficos</button>
     <button class="tab" data-tab="history">📋 Histórico</button>
+    <button class="tab" data-tab="calc">🧮 Calculadora</button>
     <button class="tab" data-tab="equipes">👥 Equipes</button>
     <button class="tab" data-tab="gincanas">🎯 Gincanas</button>
   </nav>
@@ -146,6 +147,48 @@
     <div id="history-list" class="history-list"></div>
   </section>
 
+  <!-- ══════ ABA: CALCULADORA ══════ -->
+  <section id="tab-calc" class="tab-content hidden">
+
+    <div class="cadastro-card">
+      <div class="cadastro-card-title">🧮 Calculadora de Provas</div>
+
+      <div class="form-field">
+        <label>Selecione a Gincana / Prova</label>
+        <select id="calc-gin-select">
+          <option value="">— escolha a gincana —</option>
+        </select>
+      </div>
+
+      <!-- Badge do tipo de pontuação -->
+      <div id="calc-type-badge" class="calc-type-badge hidden"></div>
+
+      <!-- Área de inputs das equipes (gerado dinamicamente) -->
+      <div id="calc-teams-area"></div>
+
+      <div class="form-actions" id="calc-actions" style="display:none">
+        <button class="btn-primary full" id="btn-calc-simulate">📊 Simular Ranking</button>
+      </div>
+    </div>
+
+    <!-- Resultado da simulação -->
+    <div id="calc-result" class="hidden">
+      <div class="section-title mt-2">RESULTADO DA SIMULAÇÃO</div>
+      <div id="calc-result-list" class="calc-result-list"></div>
+
+      <div class="calc-oficializar-area">
+        <div class="calc-warn">
+          ⚠️ Ao oficializar, os lançamentos serão inseridos automaticamente no histórico para cada equipe.
+        </div>
+        <button class="btn-primary full" id="btn-calc-oficializar"
+          style="background:linear-gradient(135deg,var(--green),#16a34a);color:#fff;margin-top:.75rem">
+          ✅ Oficializar Resultados
+        </button>
+      </div>
+    </div>
+
+  </section>
+
   <!-- ══════ ABA: EQUIPES ══════ -->
   <section id="tab-equipes" class="tab-content hidden">
     <div class="cadastro-card" id="team-form-card">
@@ -189,6 +232,20 @@
           <label>Pontos máx.</label>
           <input id="gin-maxpts-input" type="number" placeholder="Ex: 100" min="0" />
         </div>
+      </div>
+      <div class="form-field">
+        <label>Tipo de Pontuação</label>
+        <div class="scoring-type-toggle">
+          <button class="scoring-btn active" data-type="points" id="gin-type-points">
+            🏅 PONTOS
+            <span class="scoring-btn-sub">Vence quem soma mais</span>
+          </button>
+          <button class="scoring-btn" data-type="time" id="gin-type-time">
+            ⏱ TEMPO
+            <span class="scoring-btn-sub">Vence quem faz mais rápido</span>
+          </button>
+        </div>
+        <input type="hidden" id="gin-scoring-type" value="points" />
       </div>
       <div class="form-field">
         <label>Observações / Dinâmica</label>

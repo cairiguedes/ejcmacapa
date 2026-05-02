@@ -4,8 +4,8 @@
 ═══════════════════════════════════════════════════ */
 
 // ─── CONFIGURE SEU SUPABASE AQUI ────────────────────
-const SUPABASE_URL = 'https://ghcishjqgycpflwgaxwv.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdoY2lzaGpxZ3ljcGZsd2dheHd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2NTQwNzYsImV4cCI6MjA5MzIzMDA3Nn0.YHx6ZLj3yQm1Hul_bzbMXVJjnB1ebZ4Z3YRrlg5vyOE';
+const SUPABASE_URL = 'https://SEU_PROJECT.supabase.co';
+const SUPABASE_KEY = 'SUA_ANON_KEY';
 // ────────────────────────────────────────────────────
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -247,6 +247,7 @@ function renderAll() {
   renderHistory();
   renderEquipesTab();
   renderGincanasTab();
+  renderCalcTab();
   populateSelects();
   if (!document.getElementById('tab-charts').classList.contains('hidden')) {
     renderCharts();
@@ -255,10 +256,7 @@ function renderAll() {
 
 // ─── GLOBAL FILTER UI ───────────────────────────────
 function updateGlobalFilterUI() {
-  // Atualiza label do filtro ativo
   document.getElementById('gf-active-label').textContent = getFilterLabel();
-
-  // Popula select de gincanas no filtro
   const sel = document.getElementById('gf-gin-select');
   const cur = sel.value;
   sel.innerHTML = '<option value="">— escolha a competição —</option>' +
@@ -271,7 +269,7 @@ function updateGlobalFilterUI() {
 // Mostra/oculta o filtro global conforme a aba ativa
 function toggleFilterBarVisibility(tabName) {
   const bar = document.getElementById('global-filter-bar');
-  const hiddenTabs = ['equipes', 'gincanas'];
+  const hiddenTabs = ['equipes', 'gincanas', 'calc'];
   if (hiddenTabs.includes(tabName)) {
     bar.classList.add('hidden-filter');
   } else {
@@ -465,8 +463,11 @@ function renderHistory() {
       return (teamById(e.team_id)?.name||'').toLowerCase().includes(historyFilter.toLowerCase());
     })
     .sort((a,b) => {
-      const dc = b.data_entry.localeCompare(a.data_entry);
-      return dc!==0 ? dc : new Date(b.created_at)-new Date(a.created_at);
+      // Segurança: trata campos nulos/undefined antes do localeCompare
+      const da = a.data_entry || '';
+      const db = b.data_entry || '';
+      const dc = db.localeCompare(da);
+      return dc!==0 ? dc : new Date(b.created_at||0) - new Date(a.created_at||0);
     });
 
   const list = document.getElementById('history-list');
@@ -478,7 +479,8 @@ function renderHistory() {
     const neg  = e.points<0;
     const team = teamById(e.team_id);
     const gin  = e.gin_id ? ginById(e.gin_id) : null;
-    const [y,m,d] = (e.data_entry||'').split('-');
+    const parts = (e.data_entry||'--').split('-');
+    const [y,m,d] = parts.length===3 ? parts : ['?','?','?'];
     return `<div class="history-item ${neg?'punishment':''}">
       <div class="history-main">
         <div class="history-team">${escHtml(team?.name||'?')}
@@ -728,6 +730,12 @@ function startEditGin(id) {
   document.getElementById('gin-date-input').value  =g.data_gin||'';
   document.getElementById('gin-maxpts-input').value=g.max_pts||'';
   document.getElementById('gin-obs-input').value   =g.obs||'';
+  // Restore scoring type
+  const st = g.scoring_type||'points';
+  document.getElementById('gin-scoring-type').value = st;
+  document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById(st==='time'?'gin-type-time':'gin-type-points').classList.add('active');
+
   document.getElementById('gin-form-title').textContent='✏️ Editar Gincana';
   document.getElementById('gin-form-title').classList.add('editing-mode');
   document.getElementById('gin-form-card').classList.add('editing');
@@ -750,13 +758,20 @@ function cancelEditGin() {
   document.getElementById('btn-gin-cancel').style.display='none';
 }
 async function saveGincana() {
-  const name  =document.getElementById('gin-name-input').value.trim();
-  const date  =document.getElementById('gin-date-input').value;
-  const maxPts=document.getElementById('gin-maxpts-input').value;
-  const obs   =document.getElementById('gin-obs-input').value.trim();
+  const name       = document.getElementById('gin-name-input').value.trim();
+  const date       = document.getElementById('gin-date-input').value;
+  const maxPts     = document.getElementById('gin-maxpts-input').value;
+  const obs        = document.getElementById('gin-obs-input').value.trim();
+  const scoringType= document.getElementById('gin-scoring-type').value || 'points';
   if(!name) return showToast('Digite o nome da gincana!','error');
 
-  const payload={name,data_gin:date||null,max_pts:maxPts?Number(maxPts):null,obs:obs||null};
+  const payload = {
+    name,
+    data_gin:     date||null,
+    max_pts:      maxPts ? Number(maxPts) : null,
+    obs:          obs||null,
+    scoring_type: scoringType
+  };
 
   if(editingGinId) {
     const {error}=await sb.from('gincanas').update(payload).eq('id',editingGinId);
@@ -770,6 +785,10 @@ async function saveGincana() {
     document.getElementById('gin-name-input').value='';
     document.getElementById('gin-maxpts-input').value='';
     document.getElementById('gin-obs-input').value='';
+    // Reset scoring type toggle
+    document.getElementById('gin-scoring-type').value='points';
+    document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));
+    document.getElementById('gin-type-points').classList.add('active');
   }
 }
 function confirmDeleteGin(id) {
@@ -801,6 +820,200 @@ function viewGinDetail(id) {
         <div class="gin-detail-obs">${escHtml(g.obs)}</div>`
       :`<div style="color:var(--muted);font-size:.88rem">Sem observações registradas.</div>`}`;
   openModal('modal-gin-detail');
+}
+
+// ════════════════════════════════════════════════════
+//   CALCULADORA DE PROVAS
+// ════════════════════════════════════════════════════
+
+// Estado da calculadora
+let calcSimResult = []; // [{teamId, name, color, value, pts, time}]
+
+function renderCalcTab() {
+  // Popula select de gincanas
+  const sel = document.getElementById('calc-gin-select');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— escolha a gincana —</option>' +
+    gincanas.map(g => {
+      const icon = g.scoring_type==='time' ? '⏱' : '🏅';
+      return `<option value="${g.id}">${icon} ${escHtml(g.name)}${g.data_gin?' — '+fmtDate(g.data_gin):''}</option>`;
+    }).join('');
+  if (cur && sel.querySelector(`option[value="${cur}"]`)) sel.value = cur;
+  // Re-render inputs if gin still selected
+  if (sel.value) onCalcGinChange(sel.value);
+}
+
+function onCalcGinChange(ginId) {
+  const g = ginById(ginId);
+  const badge    = document.getElementById('calc-type-badge');
+  const area     = document.getElementById('calc-teams-area');
+  const actions  = document.getElementById('calc-actions');
+  const resultEl = document.getElementById('calc-result');
+
+  // Reset result
+  calcSimResult = [];
+  resultEl.classList.add('hidden');
+
+  if (!g) {
+    badge.classList.add('hidden');
+    area.innerHTML = '';
+    actions.style.display = 'none';
+    return;
+  }
+
+  const isTime = g.scoring_type === 'time';
+
+  // Badge do tipo
+  badge.className = `calc-type-badge${isTime?' time-mode':''}`;
+  badge.classList.remove('hidden');
+  badge.textContent = isTime
+    ? '⏱ Modo TEMPO — vence quem for mais rápido'
+    : '🏅 Modo PONTOS — vence quem somar mais';
+
+  // Gera um input por equipe
+  area.innerHTML = teams.length
+    ? `<div class="calc-teams-area">${teams.map(t => `
+        <div class="calc-team-row">
+          <span class="calc-team-dot" style="background:${t.color}"></span>
+          <span class="calc-team-name">${escHtml(t.name)}</span>
+          ${isTime ? `
+            <div class="calc-time-wrap" data-team="${t.id}">
+              <input class="calc-time-inp" data-team="${t.id}" data-part="min"
+                     type="text" inputmode="numeric" placeholder="00" maxlength="2" />
+              <span class="calc-time-dot">:</span>
+              <input class="calc-time-inp" data-team="${t.id}" data-part="sec"
+                     type="text" inputmode="numeric" placeholder="00" maxlength="2" />
+              <span class="calc-time-dot">:</span>
+              <input class="calc-time-inp" data-team="${t.id}" data-part="ms"
+                     type="text" inputmode="numeric" placeholder="00" maxlength="2" />
+            </div>` : `
+            <input class="calc-pts-input" data-team="${t.id}"
+                   type="number" placeholder="Pts" min="0" />`}
+        </div>`).join('')}</div>`
+    : `<div class="empty-state"><span class="empty-icon">👥</span>Cadastre equipes primeiro.</div>`;
+
+  // Máscara numérica nos campos de tempo
+  if (isTime) {
+    area.querySelectorAll('.calc-time-inp').forEach(inp => {
+      inp.addEventListener('input', () => {
+        inp.value = inp.value.replace(/\D/,'').slice(0,2);
+      });
+    });
+  }
+
+  actions.style.display = teams.length ? '' : 'none';
+}
+
+// Converte "MM:SS:ms" em milissegundos totais para comparação
+function timeToMs(str) {
+  if (!str) return Infinity;
+  const [mm,ss,ms] = str.split(':').map(Number);
+  return ((mm||0)*60*1000) + ((ss||0)*1000) + (ms||0)*10;
+}
+
+function simulateCalc() {
+  const ginId = document.getElementById('calc-gin-select').value;
+  const g = ginById(ginId);
+  if (!g) return showToast('Selecione uma gincana!','error');
+
+  const isTime = g.scoring_type === 'time';
+  const maxPts = g.max_pts || 100;
+
+  // Lê os valores de cada equipe
+  const rows = teams.map(t => {
+    if (isTime) {
+      const min = document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="min"]`)?.value||'';
+      const sec = document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="sec"]`)?.value||'';
+      const ms  = document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="ms"]` )?.value||'';
+      const timeStr = (min||sec||ms)
+        ? `${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`
+        : null;
+      return { teamId:t.id, name:t.name, color:t.color, time:timeStr, value: timeToMs(timeStr) };
+    } else {
+      const val = Number(document.querySelector(`.calc-pts-input[data-team="${t.id}"]`)?.value||0);
+      return { teamId:t.id, name:t.name, color:t.color, value:val, time:null };
+    }
+  });
+
+  // Filtra equipes sem valor preenchido
+  const filled = rows.filter(r => isTime ? r.time !== null : r.value > 0);
+  if (!filled.length) return showToast(
+    isTime ? 'Preencha o tempo de pelo menos uma equipe!' : 'Preencha a pontuação de pelo menos uma equipe!',
+    'error'
+  );
+
+  // Ordena: tempo → menor primeiro; pontos → maior primeiro
+  filled.sort((a,b) => isTime ? a.value-b.value : b.value-a.value);
+
+  // Distribui pontos por posição
+  const pontosPorPosicao = [100, 80, 60, 40, 30, 20, 10];
+  calcSimResult = filled.map((r, i) => ({
+    ...r,
+    pts: isTime ? (pontosPorPosicao[i] ?? 5) : r.value,
+    pos: i+1
+  }));
+
+  renderCalcResult(isTime);
+  document.getElementById('calc-result').classList.remove('hidden');
+  document.getElementById('calc-result').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function renderCalcResult(isTime) {
+  const posClass = i => ['gold','silver','bronze'][i]||'normal';
+  const medals   = ['🥇','🥈','🥉'];
+  document.getElementById('calc-result-list').innerHTML = calcSimResult.map((r,i) => `
+    <div class="calc-result-item ${i<3?'rank-'+(i+1):''}">
+      <span class="calc-res-pos ${posClass(i)}">${medals[i]||r.pos+'º'}</span>
+      <span class="calc-res-dot" style="background:${r.color}"></span>
+      <div class="calc-res-info">
+        <div class="calc-res-name">${escHtml(r.name)}</div>
+        ${r.time ? `<div class="calc-res-time">⏱ ${r.time}</div>` : ''}
+        ${!isTime ? `<div class="calc-res-time">Pontuação bruta: ${r.value}</div>` : ''}
+      </div>
+      <div class="calc-res-pts">+${r.pts}</div>
+    </div>`).join('');
+}
+
+async function oficializarCalc() {
+  const ginId = document.getElementById('calc-gin-select').value;
+  const g = ginById(ginId);
+  if (!g || !calcSimResult.length) return showToast('Nada para oficializar!','error');
+
+  const dateStr = today();
+  const btn = document.getElementById('btn-calc-oficializar');
+  btn.disabled = true;
+  btn.textContent = '⏳ Salvando...';
+
+  let erros = 0;
+  for (const r of calcSimResult) {
+    const payload = {
+      team_id:         r.teamId,
+      gin_id:          ginId,
+      points:          r.pts,
+      descricao:       `Calculadora — ${g.name} — ${r.pos}º lugar`,
+      data_entry:      dateStr,
+      tipo:            'bonus',
+      completion_time: r.time || null
+    };
+    const { error } = await sb.from('entries').insert(payload);
+    if (error) { console.error(error); erros++; }
+  }
+
+  btn.disabled = false;
+  btn.textContent = '✅ Oficializar Resultados';
+
+  if (erros > 0) {
+    showToast(`${erros} erro(s) ao salvar. Verifique o console.`, 'error');
+  } else {
+    showToast(`${calcSimResult.length} lançamentos oficializados! 🎉`, 'success');
+    // Limpa calculadora
+    calcSimResult = [];
+    document.getElementById('calc-result').classList.add('hidden');
+    document.getElementById('calc-gin-select').value = '';
+    document.getElementById('calc-type-badge').classList.add('hidden');
+    document.getElementById('calc-teams-area').innerHTML = '';
+    document.getElementById('calc-actions').style.display = 'none';
+  }
 }
 
 // ─── SELECTS ────────────────────────────────────────
@@ -1059,6 +1272,22 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-gin-save').addEventListener('click', saveGincana);
   document.getElementById('btn-gin-cancel').addEventListener('click', cancelEditGin);
   document.getElementById('gin-name-input').addEventListener('keydown', e=>{if(e.key==='Enter') saveGincana();});
+
+  // ── Scoring type toggle ──
+  document.querySelectorAll('.scoring-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('gin-scoring-type').value = btn.dataset.type;
+    });
+  });
+
+  // ── Calculadora ──
+  document.getElementById('calc-gin-select').addEventListener('change', e => {
+    onCalcGinChange(e.target.value);
+  });
+  document.getElementById('btn-calc-simulate').addEventListener('click', simulateCalc);
+  document.getElementById('btn-calc-oficializar').addEventListener('click', oficializarCalc);
 
   // ── History search ──
   document.getElementById('history-search').addEventListener('input', e=>{
