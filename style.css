@@ -324,16 +324,24 @@ body {
 .history-item {
   background:var(--card); border:1px solid var(--border);
   border-radius:var(--radius-sm); padding:.75rem .9rem;
-  display:grid; grid-template-columns:1fr auto; gap:.12rem;
+  display:flex; align-items:center; gap:.75rem;
   animation:slideIn .25s ease;
+  transition: border-color .2s;
 }
+.history-item:hover { border-color: rgba(245,200,66,.25); }
 .history-item.punishment { border-left:3px solid var(--red); background:linear-gradient(90deg,rgba(239,68,68,.07),var(--card)); }
+.history-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:.1rem; }
 .history-team { font-weight:900; font-size:.88rem; }
-.history-pts  { font-family:'Bebas Neue',sans-serif; font-size:1.25rem; color:var(--green); grid-row:1/4; align-self:center; text-align:right; min-width:56px; }
-.history-pts.negative { color:var(--red); }
 .history-meta { font-size:.68rem; color:var(--muted); }
 .history-gin  { font-size:.67rem; color:var(--accent2); }
 .history-desc { font-size:.73rem; color:var(--text); opacity:.7; }
+.history-right {
+  display:flex; flex-direction:column; align-items:flex-end;
+  gap:.35rem; flex-shrink:0;
+}
+.history-pts  { font-family:'Bebas Neue',sans-serif; font-size:1.3rem; color:var(--green); line-height:1; }
+.history-pts.negative { color:var(--red); }
+.history-actions { display:flex; gap:.25rem; }
 
 /* ═══════════════════════════════════════
    ABAS EQUIPES & GINCANAS — CRUD

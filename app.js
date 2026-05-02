@@ -4,8 +4,8 @@
 ═══════════════════════════════════════════════════ */
 
 // ─── CONFIGURE SEU SUPABASE AQUI ────────────────────
-const SUPABASE_URL = 'https://ghcishjqgycpflwgaxwv.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdoY2lzaGpxZ3ljcGZsd2dheHd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2NTQwNzYsImV4cCI6MjA5MzIzMDA3Nn0.YHx6ZLj3yQm1Hul_bzbMXVJjnB1ebZ4Z3YRrlg5vyOE';
+const SUPABASE_URL = 'https://SEU_PROJECT.supabase.co';
+const SUPABASE_KEY = 'SUA_ANON_KEY';
 // ────────────────────────────────────────────────────
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -480,13 +480,105 @@ function renderHistory() {
     const gin  = e.gin_id ? ginById(e.gin_id) : null;
     const [y,m,d] = (e.data_entry||'').split('-');
     return `<div class="history-item ${neg?'punishment':''}">
-      <div class="history-team">${escHtml(team?.name||'?')} ${neg?'⚠️':''}</div>
-      <div class="history-pts ${neg?'negative':''}" style="grid-row:1/4">${e.points>0?'+':''}${e.points}</div>
-      <div class="history-meta">${d}/${m}/${y} · ${e.tipo==='punishment'?'Punição':'Pontuação'}</div>
-      ${gin        ? `<div class="history-gin">🎯 ${escHtml(gin.name)}</div>` : ''}
-      ${e.descricao? `<div class="history-desc">${escHtml(e.descricao)}</div>` : ''}
+      <div class="history-main">
+        <div class="history-team">${escHtml(team?.name||'?')}
+          ${neg?'<span class="score-badge-pun">PUNIÇÃO</span>':''}
+        </div>
+        <div class="history-meta">${d}/${m}/${y} · ${e.tipo==='punishment'?'Punição':'Pontuação'}</div>
+        ${gin        ? `<div class="history-gin">🎯 ${escHtml(gin.name)}</div>` : ''}
+        ${e.descricao? `<div class="history-desc">${escHtml(e.descricao)}</div>` : ''}
+      </div>
+      <div class="history-right">
+        <div class="history-pts ${neg?'negative':''}">${e.points>0?'+':''}${e.points}</div>
+        <div class="history-actions">
+          <button class="btn-edit"   data-edit-entry="${e.id}" title="Editar">✏️</button>
+          <button class="btn-delete" data-del-entry="${e.id}"  title="Excluir">🗑</button>
+        </div>
+      </div>
     </div>`;
   }).join('');
+
+  list.querySelectorAll('[data-edit-entry]').forEach(btn =>
+    btn.addEventListener('click', () => openEditEntry(btn.dataset.editEntry)));
+  list.querySelectorAll('[data-del-entry]').forEach(btn =>
+    btn.addEventListener('click', () => confirmDeleteEntry(btn.dataset.delEntry)));
+}
+
+// ── ENTRY CRUD ───────────────────────────────────────
+function openEditEntry(id) {
+  const e = entries.find(x => x.id === id);
+  if (!e) return;
+
+  // Popula selects do modal de edição
+  const teamOpts = teams.map(t =>
+    `<option value="${t.id}" ${t.id===e.team_id?'selected':''}>${escHtml(t.name)}</option>`
+  ).join('');
+  const ginOpts = gincanas.map(g =>
+    `<option value="${g.id}" ${g.id===e.gin_id?'selected':''}>${escHtml(g.name)}</option>`
+  ).join('');
+
+  document.getElementById('edit-entry-id').value      = e.id;
+  document.getElementById('edit-entry-team').innerHTML = '<option value="">— selecione —</option>' + teamOpts;
+  document.getElementById('edit-entry-gin').innerHTML  = '<option value="">— nenhuma —</option>' + ginOpts;
+  document.getElementById('edit-entry-pts').value      = e.points;
+  document.getElementById('edit-entry-desc').value     = e.descricao || '';
+  document.getElementById('edit-entry-date').value     = e.data_entry;
+
+  // Cor do header conforme tipo
+  const box = document.getElementById('modal-edit-entry').querySelector('.modal-box');
+  if (e.tipo === 'punishment') {
+    box.classList.add('punishment-box');
+    document.getElementById('edit-entry-modal-title').textContent = '⚠️ Editar Punição';
+  } else {
+    box.classList.remove('punishment-box');
+    document.getElementById('edit-entry-modal-title').textContent = '✏️ Editar Lançamento';
+  }
+
+  openModal('modal-edit-entry');
+}
+
+async function saveEditEntry() {
+  const id       = document.getElementById('edit-entry-id').value;
+  const team_id  = document.getElementById('edit-entry-team').value;
+  const gin_id   = document.getElementById('edit-entry-gin').value;
+  const points   = Number(document.getElementById('edit-entry-pts').value);
+  const descricao= document.getElementById('edit-entry-desc').value.trim();
+  const data_entry= document.getElementById('edit-entry-date').value;
+
+  if (!team_id)               return showToast('Selecione uma equipe!', 'error');
+  if (!points || isNaN(points)) return showToast('Informe a pontuação!', 'error');
+  if (!data_entry)            return showToast('Informe a data!', 'error');
+
+  const entry = entries.find(x => x.id === id);
+  const tipo  = entry?.tipo || (points < 0 ? 'punishment' : 'bonus');
+
+  const { error } = await sb.from('entries').update({
+    team_id, gin_id: gin_id||null, points, descricao, data_entry, tipo
+  }).eq('id', id);
+
+  if (error) { console.error(error); return showToast('Erro: '+(error.message||'falha ao salvar'), 'error'); }
+  closeModal('modal-edit-entry');
+  showToast('Lançamento atualizado! ✅', 'success');
+}
+
+function confirmDeleteEntry(id) {
+  const e    = entries.find(x => x.id === id);
+  if (!e) return;
+  const team = teamById(e.team_id);
+  const neg  = e.points < 0;
+  document.getElementById('confirm-title').textContent = 'Excluir Lançamento';
+  document.getElementById('confirm-message').innerHTML =
+    `Excluir o lançamento de <strong>${neg?'':'+'}${e.points} pts</strong> ` +
+    `para <strong>${escHtml(team?.name||'?')}</strong> em <strong>${fmtDate(e.data_entry)}</strong>?` +
+    `<br><br>⚠️ Esta ação <strong>não pode ser desfeita</strong>.`;
+  confirmCallback = () => deleteEntry(id);
+  openModal('modal-confirm');
+}
+
+async function deleteEntry(id) {
+  const { error } = await sb.from('entries').delete().eq('id', id);
+  if (error) { console.error(error); return showToast('Erro: '+(error.message||'falha ao excluir'), 'error'); }
+  showToast('Lançamento excluído.', 'info');
 }
 
 // ── EQUIPES ───────────────────────────────────────────
@@ -864,6 +956,9 @@ document.addEventListener('DOMContentLoaded', () => {
     closeModal('modal-punishment');
     showToast(`⚠️ Punição de ${pts} pts aplicada!`,'error');
   });
+
+  // ── Salvar edição de lançamento ──
+  document.getElementById('btn-save-edit-entry').addEventListener('click', saveEditEntry);
 
   // ── Equipes CRUD ──
   document.getElementById('btn-team-save').addEventListener('click', saveTeam);

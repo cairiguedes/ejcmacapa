@@ -287,6 +287,38 @@
   </div>
 </div>
 
+<!-- EDITAR LANÇAMENTO -->
+<div id="modal-edit-entry" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span id="edit-entry-modal-title">✏️ Editar Lançamento</span>
+      <button class="close-btn" data-close="modal-edit-entry">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="edit-entry-id" />
+
+      <label>Equipe</label>
+      <select id="edit-entry-team"></select>
+
+      <label>Gincana (opcional)</label>
+      <select id="edit-entry-gin"></select>
+
+      <label>Pontuação</label>
+      <input id="edit-entry-pts" type="number" placeholder="Ex: 50 ou -20" />
+
+      <label>Descrição (opcional)</label>
+      <input id="edit-entry-desc" type="text" placeholder="Ex: Prova da música" />
+
+      <label>Data</label>
+      <input id="edit-entry-date" type="date" />
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" data-close="modal-edit-entry">Cancelar</button>
+      <button class="btn-save" id="btn-save-edit-entry">Salvar ✅</button>
+    </div>
+  </div>
+</div>
+
 <!-- CONFIRMAR EXCLUSÃO -->
 <div id="modal-confirm" class="modal hidden">
   <div class="modal-box confirm-box">
