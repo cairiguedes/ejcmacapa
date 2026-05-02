@@ -4,21 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#1a0533" />
-  <meta name="description" content="Sistema de pontuação para Gincana EJC" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="EJC Gincana" />
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icon-192.png" />
   <title>EJC Gincana 🏆</title>
-
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Nunito:wght@400;600;700;900&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-
-  <!-- Supabase SDK -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -35,6 +30,7 @@
 <!-- ──────────── APP ──────────── -->
 <div id="app" class="hidden">
 
+  <!-- HEADER -->
   <header class="app-header">
     <div class="header-left">
       <span class="header-cross">✝</span>
@@ -46,6 +42,57 @@
     </div>
   </header>
 
+  <!-- ════════════════════════════════════
+       FILTRO GLOBAL — aparece em todas as
+       abas de pontuação (exceto cadastro)
+  ════════════════════════════════════ -->
+  <div id="global-filter-bar" class="global-filter-bar">
+
+    <!-- Linha 1: modo de filtro -->
+    <div class="gf-mode-row">
+      <button class="gf-mode-btn active" data-mode="period">📅 Período</button>
+      <button class="gf-mode-btn"        data-mode="gin">🎯 Competição</button>
+      <button class="gf-mode-btn"        data-mode="custom">✂️ Personalizado</button>
+    </div>
+
+    <!-- Painel: Período pré-definido -->
+    <div id="gf-panel-period" class="gf-panel">
+      <div class="gf-period-chips">
+        <button class="gf-chip active" data-period="today">Hoje</button>
+        <button class="gf-chip" data-period="week">Semana</button>
+        <button class="gf-chip" data-period="month">Mês</button>
+        <button class="gf-chip" data-period="year">Ano 🏆</button>
+        <button class="gf-chip" data-period="all">Tudo</button>
+      </div>
+    </div>
+
+    <!-- Painel: Por competição (gincana) -->
+    <div id="gf-panel-gin" class="gf-panel hidden">
+      <select id="gf-gin-select">
+        <option value="">— escolha a competição —</option>
+      </select>
+    </div>
+
+    <!-- Painel: Período personalizado -->
+    <div id="gf-panel-custom" class="gf-panel hidden">
+      <div class="gf-custom-row">
+        <div class="gf-date-field">
+          <label>De</label>
+          <input id="gf-date-from" type="date" />
+        </div>
+        <div class="gf-date-field">
+          <label>Até</label>
+          <input id="gf-date-to" type="date" />
+        </div>
+        <button id="gf-custom-apply" class="gf-apply-btn">Filtrar</button>
+      </div>
+    </div>
+
+    <!-- Label do filtro ativo -->
+    <div id="gf-active-label" class="gf-active-label"></div>
+  </div>
+
+  <!-- NAV TABS -->
   <nav class="tab-bar">
     <button class="tab active" data-tab="home">🏠 Início</button>
     <button class="tab" data-tab="ranking">🏆 Ranking</button>
@@ -58,12 +105,15 @@
   <!-- ══════ HOME ══════ -->
   <section id="tab-home" class="tab-content active">
     <div class="section-title">
-      <span>TOP 3 DA SEMANA</span>
-      <small id="week-label"></small>
+      <span>TOP 3</span>
+      <small id="home-period-label"></small>
     </div>
     <div id="top3-cards" class="top3-grid"></div>
 
-    <div class="section-title mt-2">PLACAR DE HOJE</div>
+    <div class="section-title mt-2">
+      <span>LANÇAMENTOS</span>
+      <small id="home-entries-label"></small>
+    </div>
     <div id="today-list" class="score-list"></div>
 
     <div class="fab-area">
@@ -74,21 +124,11 @@
 
   <!-- ══════ RANKING ══════ -->
   <section id="tab-ranking" class="tab-content hidden">
-    <div class="filter-bar">
-      <button class="filter-btn active" data-period="day">Hoje</button>
-      <button class="filter-btn" data-period="week">Semana</button>
-      <button class="filter-btn" data-period="month">Mês</button>
-      <button class="filter-btn" data-period="year">Ano 🏆</button>
-    </div>
     <div id="ranking-list" class="ranking-list"></div>
   </section>
 
   <!-- ══════ GRÁFICOS ══════ -->
   <section id="tab-charts" class="tab-content hidden">
-    <div class="filter-bar">
-      <button class="filter-btn active" data-chart-period="week">Semana</button>
-      <button class="filter-btn" data-chart-period="month">Mês</button>
-    </div>
     <div class="chart-card">
       <div class="chart-label">Pontuação por Equipe</div>
       <div class="chart-wrap"><canvas id="chart-bar"></canvas></div>
@@ -101,7 +141,7 @@
 
   <!-- ══════ HISTÓRICO ══════ -->
   <section id="tab-history" class="tab-content hidden">
-    <div class="filter-bar search-bar">
+    <div class="filter-bar search-bar" style="margin-bottom:.75rem">
       <input id="history-search" type="text" placeholder="🔍 Buscar equipe..." />
     </div>
     <div id="history-list" class="history-list"></div>
@@ -109,8 +149,6 @@
 
   <!-- ══════ ABA: EQUIPES ══════ -->
   <section id="tab-equipes" class="tab-content hidden">
-
-    <!-- Formulário criar / editar -->
     <div class="cadastro-card" id="team-form-card">
       <div class="cadastro-card-title" id="team-form-title">✨ Nova Equipe</div>
       <div class="form-row">
@@ -128,22 +166,17 @@
         <button class="btn-primary full" id="btn-team-save">+ Adicionar Equipe</button>
       </div>
     </div>
-
     <div class="section-title mt-2">
       EQUIPES CADASTRADAS
       <span id="teams-count" class="count-badge"></span>
     </div>
     <div id="teams-list" class="entity-list"></div>
-
   </section>
 
   <!-- ══════ ABA: GINCANAS ══════ -->
   <section id="tab-gincanas" class="tab-content hidden">
-
-    <!-- Formulário criar / editar -->
     <div class="cadastro-card" id="gin-form-card">
       <div class="cadastro-card-title" id="gin-form-title">✨ Nova Gincana</div>
-
       <div class="form-field">
         <label>Nome da gincana</label>
         <input id="gin-name-input" type="text" placeholder="Ex: Gincana do Espírito Santo" />
@@ -168,13 +201,11 @@
         <button class="btn-primary full" id="btn-gin-save">+ Criar Gincana</button>
       </div>
     </div>
-
     <div class="section-title mt-2">
       GINCANAS CADASTRADAS
       <span id="gincanas-count" class="count-badge"></span>
     </div>
     <div id="gincanas-list" class="entity-list"></div>
-
   </section>
 
 </div><!-- /app -->
@@ -191,10 +222,8 @@
     <div class="modal-body">
       <label>Equipe</label>
       <select id="score-team"><option value="">— selecione a equipe —</option></select>
-
       <label>Gincana (opcional)</label>
       <select id="score-gin"><option value="">— nenhuma —</option></select>
-
       <label>Pontuação</label>
       <div class="quick-pts">
         <button class="qpt" data-v="10">+10</button>
@@ -203,10 +232,8 @@
         <button class="qpt" data-v="100">+100</button>
       </div>
       <input id="score-pts" type="number" placeholder="Ou digite o valor..." min="1" />
-
       <label>Descrição (opcional)</label>
       <input id="score-desc" type="text" placeholder="Ex: Prova da música" />
-
       <label>Data</label>
       <input id="score-date" type="date" />
     </div>
@@ -227,7 +254,6 @@
     <div class="modal-body">
       <label>Equipe</label>
       <select id="pun-team"><option value="">— selecione a equipe —</option></select>
-
       <label>Penalidade</label>
       <div class="quick-pts punishment-pts">
         <button class="qpt bad" data-v="-10">-10</button>
@@ -236,10 +262,8 @@
         <button class="qpt bad" data-v="-100">-100</button>
       </div>
       <input id="pun-pts" type="number" placeholder="Ou digite (ex: -30)..." />
-
       <label>Motivo (importante!)</label>
       <input id="pun-desc" type="text" placeholder="Ex: Atraso na prova" />
-
       <label>Data</label>
       <input id="pun-date" type="date" />
     </div>
@@ -250,7 +274,7 @@
   </div>
 </div>
 
-<!-- DETALHE / VER GINCANA -->
+<!-- DETALHE GINCANA -->
 <div id="modal-gin-detail" class="modal hidden">
   <div class="modal-box">
     <div class="modal-header">
@@ -272,11 +296,12 @@
       <button class="close-btn" data-close="modal-confirm">✕</button>
     </div>
     <div class="modal-body">
-      <p id="confirm-message" style="font-size:.95rem; line-height:1.6; color:var(--text)"></p>
+      <p id="confirm-message" style="font-size:.95rem;line-height:1.6;color:var(--text)"></p>
     </div>
     <div class="modal-footer">
       <button class="btn-cancel" data-close="modal-confirm">Cancelar</button>
-      <button class="btn-save" id="btn-confirm-ok" style="background:linear-gradient(135deg,var(--red),#b91c1c);color:#fff;">Excluir</button>
+      <button class="btn-save" id="btn-confirm-ok"
+        style="background:linear-gradient(135deg,var(--red),#b91c1c);color:#fff;">Excluir</button>
     </div>
   </div>
 </div>
