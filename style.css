@@ -536,6 +536,45 @@ body {
 .btn-save:active { transform:scale(.96); opacity:.85; }
 .punishment-save { background:linear-gradient(135deg,var(--red),#b91c1c) !important; color:#fff !important; }
 
+/* ── TIME INPUT ── */
+.time-input-row {
+  display: flex; align-items: center; gap: .35rem;
+}
+.time-field {
+  display: flex; flex-direction: column; align-items: center; gap: .2rem;
+  flex: 1;
+}
+.time-field input {
+  background: var(--card2); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--radius-sm);
+  padding: .6rem .4rem; font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.25rem; text-align: center; width: 100%;
+  letter-spacing: .05em;
+}
+.time-field input:focus { outline: none; border-color: var(--gold); }
+.time-field input::placeholder { color: var(--muted); opacity: .5; }
+.time-label {
+  font-size: .62rem; font-weight: 900; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.time-sep {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.4rem; color: var(--muted);
+  padding-bottom: 1.1rem; /* alinha com o input */
+  flex-shrink: 0;
+}
+
+/* ── HISTORY TIME BADGE ── */
+.history-time {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: .85rem; color: var(--accent2);
+  letter-spacing: .05em;
+  background: rgba(192,38,211,.12);
+  border: 1px solid rgba(192,38,211,.25);
+  border-radius: 99px; padding: .1rem .55rem;
+  text-align: center;
+}
+
 /* ── TOAST ── */
 .toast {
   position:fixed; bottom:5.5rem; left:50%; transform:translateX(-50%);

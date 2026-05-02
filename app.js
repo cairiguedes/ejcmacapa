@@ -4,8 +4,8 @@
 ═══════════════════════════════════════════════════ */
 
 // ─── CONFIGURE SEU SUPABASE AQUI ────────────────────
-const SUPABASE_URL = 'https://ghcishjqgycpflwgaxwv.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdoY2lzaGpxZ3ljcGZsd2dheHd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2NTQwNzYsImV4cCI6MjA5MzIzMDA3Nn0.YHx6ZLj3yQm1Hul_bzbMXVJjnB1ebZ4Z3YRrlg5vyOE';
+const SUPABASE_URL = 'https://SEU_PROJECT.supabase.co';
+const SUPABASE_KEY = 'SUA_ANON_KEY';
 // ────────────────────────────────────────────────────
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -490,6 +490,9 @@ function renderHistory() {
       </div>
       <div class="history-right">
         <div class="history-pts ${neg?'negative':''}">${e.points>0?'+':''}${e.points}</div>
+        ${e.completion_time
+          ? `<div class="history-time">⏱ ${escHtml(e.completion_time)}</div>`
+          : ''}
         <div class="history-actions">
           <button class="btn-edit"   data-edit-entry="${e.id}" title="Editar">✏️</button>
           <button class="btn-delete" data-del-entry="${e.id}"  title="Excluir">🗑</button>
@@ -509,7 +512,6 @@ function openEditEntry(id) {
   const e = entries.find(x => x.id === id);
   if (!e) return;
 
-  // Popula selects do modal de edição
   const teamOpts = teams.map(t =>
     `<option value="${t.id}" ${t.id===e.team_id?'selected':''}>${escHtml(t.name)}</option>`
   ).join('');
@@ -517,14 +519,23 @@ function openEditEntry(id) {
     `<option value="${g.id}" ${g.id===e.gin_id?'selected':''}>${escHtml(g.name)}</option>`
   ).join('');
 
-  document.getElementById('edit-entry-id').value      = e.id;
-  document.getElementById('edit-entry-team').innerHTML = '<option value="">— selecione —</option>' + teamOpts;
-  document.getElementById('edit-entry-gin').innerHTML  = '<option value="">— nenhuma —</option>' + ginOpts;
-  document.getElementById('edit-entry-pts').value      = e.points;
-  document.getElementById('edit-entry-desc').value     = e.descricao || '';
-  document.getElementById('edit-entry-date').value     = e.data_entry;
+  document.getElementById('edit-entry-id').value       = e.id;
+  document.getElementById('edit-entry-team').innerHTML  = '<option value="">— selecione —</option>' + teamOpts;
+  document.getElementById('edit-entry-gin').innerHTML   = '<option value="">— nenhuma —</option>' + ginOpts;
+  document.getElementById('edit-entry-pts').value       = e.points;
+  document.getElementById('edit-entry-desc').value      = e.descricao || '';
+  document.getElementById('edit-entry-date').value      = e.data_entry;
 
-  // Cor do header conforme tipo
+  // Preenche campos de tempo se existir
+  if (e.completion_time) {
+    const parts = e.completion_time.split(':');
+    document.getElementById('edit-time-min').value = parts[0]||'';
+    document.getElementById('edit-time-sec').value = parts[1]||'';
+    document.getElementById('edit-time-ms').value  = parts[2]||'';
+  } else {
+    clearTimeInputs('edit-time-min','edit-time-sec','edit-time-ms');
+  }
+
   const box = document.getElementById('modal-edit-entry').querySelector('.modal-box');
   if (e.tipo === 'punishment') {
     box.classList.add('punishment-box');
@@ -538,27 +549,29 @@ function openEditEntry(id) {
 }
 
 async function saveEditEntry() {
-  const id       = document.getElementById('edit-entry-id').value;
-  const team_id  = document.getElementById('edit-entry-team').value;
-  const gin_id   = document.getElementById('edit-entry-gin').value;
-  const points   = Number(document.getElementById('edit-entry-pts').value);
-  const descricao= document.getElementById('edit-entry-desc').value.trim();
-  const data_entry= document.getElementById('edit-entry-date').value;
+  const id         = document.getElementById('edit-entry-id').value;
+  const team_id    = document.getElementById('edit-entry-team').value;
+  const gin_id     = document.getElementById('edit-entry-gin').value;
+  const points     = Number(document.getElementById('edit-entry-pts').value);
+  const descricao  = document.getElementById('edit-entry-desc').value.trim();
+  const data_entry = document.getElementById('edit-entry-date').value;
+  const completionTime = buildCompletionTime('edit-time-min','edit-time-sec','edit-time-ms');
 
-  if (!team_id)               return showToast('Selecione uma equipe!', 'error');
-  if (!points || isNaN(points)) return showToast('Informe a pontuação!', 'error');
-  if (!data_entry)            return showToast('Informe a data!', 'error');
+  if (!team_id)                return showToast('Selecione uma equipe!','error');
+  if (!points || isNaN(points)) return showToast('Informe a pontuação!','error');
+  if (!data_entry)             return showToast('Informe a data!','error');
 
   const entry = entries.find(x => x.id === id);
   const tipo  = entry?.tipo || (points < 0 ? 'punishment' : 'bonus');
 
   const { error } = await sb.from('entries').update({
-    team_id, gin_id: gin_id||null, points, descricao, data_entry, tipo
+    team_id, gin_id: gin_id||null, points, descricao, data_entry, tipo,
+    completion_time: completionTime||null
   }).eq('id', id);
 
-  if (error) { console.error(error); return showToast('Erro: '+(error.message||'falha ao salvar'), 'error'); }
+  if (error) { console.error(error); return showToast('Erro: '+(error.message||'falha ao salvar'),'error'); }
   closeModal('modal-edit-entry');
-  showToast('Lançamento atualizado! ✅', 'success');
+  showToast('Lançamento atualizado! ✅','success');
 }
 
 function confirmDeleteEntry(id) {
@@ -808,11 +821,51 @@ function populateSelects() {
 }
 
 // ─── ENTRY SAVE ─────────────────────────────────────
-async function saveEntry({teamId,ginId,points,desc,date,type}) {
-  const payload={team_id:teamId,gin_id:ginId||null,points:Number(points),
-                 descricao:desc||'',data_entry:date,tipo:type};
+async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}) {
+  const payload={
+    team_id:    teamId,
+    gin_id:     ginId||null,
+    points:     Number(points),
+    descricao:  desc||'',
+    data_entry: date,
+    tipo:       type,
+    completion_time: completionTime||null
+  };
   const {error}=await sb.from('entries').insert(payload);
   if(error){console.error(error);showToast('Erro: '+(error.message||'falha ao salvar'),'error');}
+}
+
+// ─── COMPLETION TIME HELPERS ─────────────────────────
+// Monta a string "MM:SS:ms" a partir dos três campos
+function buildCompletionTime(minEl, secEl, msEl) {
+  const min = document.getElementById(minEl).value.trim();
+  const sec = document.getElementById(secEl).value.trim();
+  const ms  = document.getElementById(msEl).value.trim();
+  if (!min && !sec && !ms) return null; // campo vazio → opcional
+  const mm = (min||'00').padStart(2,'0');
+  const ss = (sec||'00').padStart(2,'0');
+  const cs = (ms||'00').padStart(2,'0');
+  return `${mm}:${ss}:${cs}`;
+}
+
+// Limpa os três campos de tempo
+function clearTimeInputs(...ids) {
+  ids.forEach(id => { document.getElementById(id).value = ''; });
+}
+
+// Aplica máscara numérica nos campos de tempo (só números, max 2 dígitos)
+function applyTimeMask(el, maxVal) {
+  el.addEventListener('input', () => {
+    el.value = el.value.replace(/\D/g,'').slice(0,2);
+    if (maxVal && Number(el.value) > maxVal) el.value = String(maxVal).padStart(2,'0');
+  });
+  // Avança para o próximo campo ao digitar 2 dígitos
+  el.addEventListener('keyup', () => {
+    if (el.value.length === 2 && el.nextElementSibling) {
+      const next = el.parentElement.querySelector(`[tabindex="${Number(el.tabIndex)+1}"]`);
+      if (next) next.focus();
+    }
+  });
 }
 
 // ─── MODAL HELPERS ──────────────────────────────────
@@ -823,6 +876,14 @@ function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('gin-date-input').value = today();
+
+  // ── Máscaras dos campos de tempo ──
+  applyTimeMask(document.getElementById('score-time-min'), 99);
+  applyTimeMask(document.getElementById('score-time-sec'), 59);
+  applyTimeMask(document.getElementById('score-time-ms'),  99);
+  applyTimeMask(document.getElementById('edit-time-min'),  99);
+  applyTimeMask(document.getElementById('edit-time-sec'),  59);
+  applyTimeMask(document.getElementById('edit-time-ms'),   99);
 
   // ── Tabs ──
   document.querySelectorAll('.tab').forEach(tab => {
@@ -885,6 +946,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('score-team').value='';
     document.getElementById('score-gin').value='';
     document.querySelectorAll('#modal-score .qpt').forEach(b=>b.classList.remove('selected'));
+    clearTimeInputs('score-time-min','score-time-sec','score-time-ms');
     openModal('modal-score');
   };
   document.getElementById('btn-header-score').addEventListener('click',openScoreModal);
@@ -929,17 +991,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Salvar pontos ──
   document.getElementById('btn-save-score').addEventListener('click', async()=>{
-    const teamId=document.getElementById('score-team').value;
-    const ginId =document.getElementById('score-gin').value;
-    const pts   =Number(document.getElementById('score-pts').value);
-    const desc  =document.getElementById('score-desc').value.trim();
-    const date  =document.getElementById('score-date').value;
+    const teamId = document.getElementById('score-team').value;
+    const ginId  = document.getElementById('score-gin').value;
+    const pts    = Number(document.getElementById('score-pts').value);
+    const desc   = document.getElementById('score-desc').value.trim();
+    const date   = document.getElementById('score-date').value;
+    const completionTime = buildCompletionTime('score-time-min','score-time-sec','score-time-ms');
+
     if(!teamId) return showToast('Selecione uma equipe!','error');
     if(!pts||isNaN(pts)||pts<=0) return showToast('Informe uma pontuação válida!','error');
     if(!date) return showToast('Informe a data!','error');
-    await saveEntry({teamId,ginId,points:pts,desc,date,type:'bonus'});
+
+    await saveEntry({teamId,ginId,points:pts,desc,date,type:'bonus',completionTime});
     closeModal('modal-score');
-    showToast(`+${pts} pts para ${teamById(teamId)?.name}! 🎉`,'success');
+    const timeStr = completionTime ? ` ⏱ ${completionTime}` : '';
+    showToast(`+${pts} pts para ${teamById(teamId)?.name}!${timeStr} 🎉`,'success');
   });
 
   // ── Salvar punição ──

@@ -233,6 +233,25 @@
       <input id="score-pts" type="number" placeholder="Ou digite o valor..." min="1" />
       <label>Descrição (opcional)</label>
       <input id="score-desc" type="text" placeholder="Ex: Prova da música" />
+
+      <label>Tempo de conclusão (opcional)</label>
+      <div class="time-input-row">
+        <div class="time-field">
+          <input id="score-time-min" type="text" inputmode="numeric" placeholder="00" maxlength="2" tabindex="1" />
+          <span class="time-label">min</span>
+        </div>
+        <span class="time-sep">:</span>
+        <div class="time-field">
+          <input id="score-time-sec" type="text" inputmode="numeric" placeholder="00" maxlength="2" tabindex="2" />
+          <span class="time-label">seg</span>
+        </div>
+        <span class="time-sep">:</span>
+        <div class="time-field">
+          <input id="score-time-ms" type="text" inputmode="numeric" placeholder="00" maxlength="2" tabindex="3" />
+          <span class="time-label">ms</span>
+        </div>
+      </div>
+
       <label>Data</label>
       <input id="score-date" type="date" />
     </div>
@@ -308,6 +327,24 @@
 
       <label>Descrição (opcional)</label>
       <input id="edit-entry-desc" type="text" placeholder="Ex: Prova da música" />
+
+      <label>Tempo de conclusão (opcional)</label>
+      <div class="time-input-row">
+        <div class="time-field">
+          <input id="edit-time-min" type="text" inputmode="numeric" placeholder="00" maxlength="2" tabindex="10" />
+          <span class="time-label">min</span>
+        </div>
+        <span class="time-sep">:</span>
+        <div class="time-field">
+          <input id="edit-time-sec" type="text" inputmode="numeric" placeholder="00" maxlength="2" tabindex="11" />
+          <span class="time-label">seg</span>
+        </div>
+        <span class="time-sep">:</span>
+        <div class="time-field">
+          <input id="edit-time-ms" type="text" inputmode="numeric" placeholder="00" maxlength="2" tabindex="12" />
+          <span class="time-label">ms</span>
+        </div>
+      </div>
 
       <label>Data</label>
       <input id="edit-entry-date" type="date" />
