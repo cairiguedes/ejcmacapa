@@ -209,10 +209,10 @@ function renderAll() {
 
 // ── HOME ────────────────────────────────────────────
 function renderHome() {
-  document.getElementById('week-label').textContent = weekLabel();
-  const { start, end } = getWeekRange();
-  renderTop3(calcRanking(filterEntries(start, end)));
-
+  // No app.js, mude para:
+if (document.getElementById('week-label')) {
+    document.getElementById('week-label').textContent = weekLabel();
+}
   const todayEntries = entries
     .filter(e => e.data_entry === today())
     .sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
