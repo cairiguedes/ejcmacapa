@@ -70,7 +70,7 @@ body {
   backdrop-filter: blur(16px);
 }
 .header-left { display: flex; align-items: center; gap: .5rem; }
-.header-logo { width: 150px; height: 150px; object-fit: contain; }
+.header-logo { width: 300px; height: 300px; object-fit: contain; }
 .header-title { font-family:'Bebas Neue',sans-serif; font-size:1.5rem; letter-spacing:.08em; }
 .header-title span { color: var(--gold); }
 .header-right { display: flex; gap: .4rem; }
