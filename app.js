@@ -182,47 +182,45 @@ async function resolveUserRole() {
   await launchApp();
 }
 
-// Fica escutando o perfil do usuário pendente no Realtime
-// Quando o admin aprovar, o app reage automaticamente sem precisar recarregar
+// Polling do perfil pendente — verifica a cada 5s se foi aprovado.
+// Mais confiável que Realtime filtrado, que depende de REPLICA IDENTITY FULL
+// estar configurado E de policies específicas para funcionar.
 let pendingWatcher = null;
+
 function watchPendingProfile() {
-  // Evita múltiplas inscrições
-  if (pendingWatcher) { pendingWatcher.unsubscribe(); }
+  // Cancela qualquer watcher anterior
+  if (pendingWatcher) { clearInterval(pendingWatcher); pendingWatcher = null; }
 
-  pendingWatcher = sb
-    .channel('profile-watch-' + currentUser.id)
-    .on(
-      'postgres_changes',
-      {
-        event:  'UPDATE',
-        schema: 'public',
-        table:  'profiles',
-        filter: `id=eq.${currentUser.id}`
-      },
-      async (payload) => {
-        const newRole = payload.new?.role;
+  pendingWatcher = setInterval(async () => {
+    if (!currentUser) { clearInterval(pendingWatcher); return; }
 
-        if (newRole === 'admin' || newRole === 'superadmin') {
-          // Foi aprovado! Recarrega o perfil e entra no app
-          pendingWatcher.unsubscribe();
-          const { data: updatedProfile } = await sb
-            .from('profiles').select('*').eq('id', currentUser.id).single();
-          currentProfile = updatedProfile;
-          showToast('✅ Acesso aprovado! Bem-vindo(a)!', 'success');
-          await launchApp();
+    const { data: profile, error } = await sb
+      .from('profiles').select('role').eq('id', currentUser.id).single();
 
-        } else if (newRole === 'blocked') {
-          // Foi bloqueado
-          pendingWatcher.unsubscribe();
-          await sb.auth.signOut();
-          currentUser = null; currentProfile = null;
-          showAuthScreen();
-          showAuthError('login', 'Seu acesso foi bloqueado pelo administrador.');
-        }
-        // Se continuar 'pending', não faz nada
-      }
-    )
-    .subscribe();
+    if (error || !profile) return; // silencia erros de rede, tenta de novo
+
+    const role = profile.role;
+
+    if (role === 'admin' || role === 'superadmin') {
+      clearInterval(pendingWatcher);
+      pendingWatcher = null;
+      // Recarrega perfil completo e entra
+      const { data: fullProfile } = await sb
+        .from('profiles').select('*').eq('id', currentUser.id).single();
+      currentProfile = fullProfile;
+      showToast('✅ Acesso aprovado! Bem-vindo(a)!', 'success');
+      await launchApp();
+
+    } else if (role === 'blocked') {
+      clearInterval(pendingWatcher);
+      pendingWatcher = null;
+      await sb.auth.signOut();
+      currentUser = null; currentProfile = null;
+      showAuthScreen();
+      showAuthError('login', 'Seu acesso foi bloqueado pelo administrador.');
+    }
+    // 'pending' → continua esperando
+  }, 5000); // verifica a cada 5 segundos
 }
 
 // ─── LANÇAR O APP ───────────────────────────────────
@@ -342,7 +340,7 @@ function populateMyProfile() {
 }
 
 async function doLogout() {
-  if (pendingWatcher) { pendingWatcher.unsubscribe(); pendingWatcher = null; }
+  if (pendingWatcher) { clearInterval(pendingWatcher); pendingWatcher = null; }
   await sb.auth.signOut();
   currentUser = null; currentProfile = null; isGuest = false;
   document.body.classList.remove('is-admin');
@@ -351,8 +349,9 @@ async function doLogout() {
 }
 
 function doGuestAccess() {
-  isGuest = true; currentUser = null; currentProfile = null;
   isGuest = true;
+  currentUser = null;
+  currentProfile = null;
   boot_guest();
 }
 
@@ -361,7 +360,8 @@ async function boot_guest() {
   applyRoleUI();
   renderAll();
   subscribeRealtime();
-  hideAllScreens();
+  hideSplash();           // ← estava faltando
+  hideAllScreens();       // fecha tela de login/pendente
   document.getElementById('app').classList.remove('hidden');
 }
 
