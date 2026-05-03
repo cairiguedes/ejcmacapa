@@ -1,64 +1,64 @@
 /* ═══════════════════════════════════════════════════
-   EJC GINCANA — app.js  (v3 — filtro global)
-   Vanilla JS SPA + Supabase Realtime
+   EJC GINCANA — app.js  (v4 — auth + relatório)
+   Supabase Auth + RLS + Roles + Report Export
 ═══════════════════════════════════════════════════ */
 
 // ─── CONFIGURE SEU SUPABASE AQUI ────────────────────
-const SUPABASE_URL = 'https://ghcishjqgycpflwgaxwv.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdoY2lzaGpxZ3ljcGZsd2dheHd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2NTQwNzYsImV4cCI6MjA5MzIzMDA3Nn0.YHx6ZLj3yQm1Hul_bzbMXVJjnB1ebZ4Z3YRrlg5vyOE';
+const SUPABASE_URL  = 'https://ghcishjqgycpflwgaxwv.supabase.co';
+const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdoY2lzaGpxZ3ljcGZsd2dheHd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2NTQwNzYsImV4cCI6MjA5MzIzMDA3Nn0.YHx6ZLj3yQm1Hul_bzbMXVJjnB1ebZ4Z3YRrlg5vyOE';
+// E-mail do super-administrador (você). Pode adicionar mais separando por vírgula.
+const SUPER_ADMINS  = ['cairiguedes77@gmail.com'];
 // ────────────────────────────────────────────────────
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ─── STATE ──────────────────────────────────────────
-let teams    = [];  // { id, name, color, created_at }
-let entries  = [];  // { id, team_id, gin_id, points, data_entry, descricao, tipo, created_at }
-let gincanas = [];  // { id, name, data_gin, max_pts, obs, created_at }
+let teams    = [];
+let entries  = [];
+let gincanas = [];
+let profiles = [];   // todos os perfis (para o painel admin)
+
+let currentUser    = null;  // objeto do Supabase Auth
+let currentProfile = null;  // { id, email, name, role }
+let isGuest        = false; // visitante sem login
 
 let barChart = null, lineChart = null;
 let historyFilter = '';
 let editingTeamId = null;
 let editingGinId  = null;
 let confirmCallback = null;
+let calcSimResult   = [];
 
 // ─── FILTRO GLOBAL ──────────────────────────────────
-// filterState define o conjunto de entries que TODAS as abas usam
 const filterState = {
-  mode:      'period',   // 'period' | 'gin' | 'custom'
-  period:    'today',    // 'today' | 'week' | 'month' | 'year' | 'all'
-  ginId:     '',         // id da gincana selecionada
+  mode:       'period',
+  period:     'today',
+  ginId:      '',
   customFrom: '',
   customTo:   ''
 };
 
-// Retorna o subconjunto de entries de acordo com filterState
 function getFilteredEntries() {
   if (filterState.mode === 'gin') {
     if (!filterState.ginId) return [];
     return entries.filter(e => e.gin_id === filterState.ginId);
   }
-
   let start, end;
-
   if (filterState.mode === 'custom') {
     if (!filterState.customFrom || !filterState.customTo) return entries;
-    start = filterState.customFrom;
-    end   = filterState.customTo;
+    start = filterState.customFrom; end = filterState.customTo;
   } else {
-    // mode === 'period'
     switch (filterState.period) {
-      case 'today': { start = end = today(); break; }
-      case 'week':  { const w = getWeekRange();  start = w.start; end = w.end; break; }
-      case 'month': { const m = getMonthRange(); start = m.start; end = m.end; break; }
-      case 'year':  { const y = getYearRange();  start = y.start; end = y.end; break; }
-      case 'all':   default: return entries;
+      case 'today': start = end = today(); break;
+      case 'week':  { const w=getWeekRange();  start=w.start; end=w.end; break; }
+      case 'month': { const m=getMonthRange(); start=m.start; end=m.end; break; }
+      case 'year':  { const y=getYearRange();  start=y.start; end=y.end; break; }
+      case 'all': default: return entries;
     }
   }
-
-  return entries.filter(e => e.data_entry >= start && e.data_entry <= end);
+  return entries.filter(e => (e.data_entry||'') >= start && (e.data_entry||'') <= end);
 }
 
-// Label descritivo do filtro ativo
 function getFilterLabel() {
   if (filterState.mode === 'gin') {
     const g = ginById(filterState.ginId);
@@ -72,97 +72,276 @@ function getFilterLabel() {
   return `📅 ${labels[filterState.period] || ''}`;
 }
 
-// ─── BOOT ───────────────────────────────────────────
+// ─── AUTH: BOOT PRINCIPAL ───────────────────────────
 async function boot() {
-  const splashTimeout = setTimeout(() => {
-    hideSplash();
-    showDiagnostic('⏱️ Tempo esgotado',
-      'O app demorou demais para conectar ao Supabase.<br><br>' +
-      'Verifique sua conexão e se a URL e a anon key estão corretas no <code>app.js</code>.');
-  }, 6000);
-
   if (SUPABASE_URL.includes('SEU_PROJECT') || SUPABASE_KEY.includes('SUA_ANON')) {
-    clearTimeout(splashTimeout);
     hideSplash();
     showDiagnostic('⚙️ Configure o Supabase',
-      'Abra o <strong>app.js</strong> e substitua <code>SUPABASE_URL</code> e <code>SUPABASE_KEY</code> ' +
-      'pelas credenciais do seu projeto em <strong>supabase.com → Settings → API</strong>.');
+      'Abra o <strong>app.js</strong> e preencha <code>SUPABASE_URL</code>, <code>SUPABASE_KEY</code> e <code>SUPER_ADMINS</code>.');
     return;
   }
 
-  try {
-    const results = await Promise.all([loadTeams(), loadEntries(), loadGincanas()]);
-    clearTimeout(splashTimeout);
-    const firstError = results.find(r => r && r.error);
-    if (firstError) {
-      hideSplash();
-      const msg = firstError.error.message || JSON.stringify(firstError.error);
-      showDiagnostic('❌ Erro de conexão',
-        'Não foi possível carregar dados do Supabase.<br><br>' +
-        '<strong>Erro:</strong> <code>' + msg + '</code><br><br>' +
-        '<strong>Causas comuns:</strong><br>' +
-        '• Tabelas ainda não criadas (rode o SQL no Supabase)<br>' +
-        '• RLS sem policies configuradas<br>' +
-        '• URL ou anon key incorretas');
-      return;
-    }
-    renderAll();
-    subscribeRealtime();
+  // Timeout de segurança para a splash nunca travar
+  const splashTimeout = setTimeout(() => {
     hideSplash();
+    showAuthScreen();
+  }, 6000);
+
+  try {
+    // Verifica sessão existente
+    const { data: { session } } = await sb.auth.getSession();
+    clearTimeout(splashTimeout);
+
+    if (session) {
+      currentUser = session.user;
+      await resolveUserRole();
+    } else {
+      hideSplash();
+      showAuthScreen();
+    }
   } catch(e) {
     clearTimeout(splashTimeout);
     hideSplash();
-    showDiagnostic('❌ Erro inesperado',
-      'Erro: <code>' + (e.message || String(e)) + '</code><br><br>' +
-      'Abra o console do navegador (F12) para mais detalhes.');
+    showAuthScreen();
+    console.error('Boot error:', e);
   }
 }
 
+// Resolve o papel do usuário após login
+async function resolveUserRole() {
+  const email = currentUser.email;
+
+  // Superadmin definido no código — acesso imediato
+  if (SUPER_ADMINS.includes(email)) {
+    currentProfile = { id: currentUser.id, email, name: email, role: 'superadmin' };
+    // Garante que o perfil existe no banco
+    await sb.from('profiles').upsert({
+      id: currentUser.id, email, name: email, role: 'superadmin'
+    }, { onConflict: 'id' });
+    await launchApp();
+    return;
+  }
+
+  // Busca perfil no banco
+  const { data: profile } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
+
+  if (!profile) {
+    // Cria perfil como pending
+    await sb.from('profiles').insert({ id: currentUser.id, email, name: currentUser.user_metadata?.name||email, role: 'pending' });
+    hideSplash();
+    showPendingScreen();
+    return;
+  }
+
+  currentProfile = profile;
+
+  if (profile.role === 'pending') { hideSplash(); showPendingScreen(); return; }
+  if (profile.role === 'blocked') {
+    hideSplash();
+    showAuthScreen();
+    showAuthError('login', 'Seu acesso foi bloqueado pelo administrador.');
+    await sb.auth.signOut();
+    return;
+  }
+
+  // admin ou superadmin
+  await launchApp();
+}
+
+// ─── LANÇAR O APP ───────────────────────────────────
+async function launchApp() {
+  await Promise.all([loadTeams(), loadEntries(), loadGincanas(), loadProfiles()]);
+  applyRoleUI();
+  renderAll();
+  subscribeRealtime();
+  hideSplash();
+  hideAllScreens();
+  document.getElementById('app').classList.remove('hidden');
+}
+
+function applyRoleUI() {
+  const role = isGuest ? 'visitor' : (currentProfile?.role || 'visitor');
+  const isAdmin = ['admin','superadmin'].includes(role);
+
+  // Adiciona/remove classe no body para controlar visibilidade via CSS
+  document.body.classList.toggle('is-admin', isAdmin);
+
+  // Badge de papel
+  const badge = document.getElementById('user-badge');
+  if (isGuest) {
+    badge.textContent = '👁 VISITANTE';
+    badge.className = 'user-badge visitor';
+  } else if (role === 'superadmin') {
+    badge.textContent = '⭐ SUPER ADMIN';
+    badge.className = 'user-badge superadmin';
+  } else {
+    badge.textContent = '🔑 ADMIN';
+    badge.className = 'user-badge admin';
+  }
+
+  // Oculta aba admin para não-superadmin
+  const adminTab = document.querySelector('[data-tab="adminpanel"]');
+  if (adminTab) adminTab.style.display = role === 'superadmin' ? '' : 'none';
+}
+
+// ─── TELAS DE AUTH ──────────────────────────────────
+function showAuthScreen()   { hideAllScreens(); document.getElementById('auth-screen').classList.remove('hidden'); }
+function showPendingScreen() { hideAllScreens(); document.getElementById('pending-screen').classList.remove('hidden'); }
+function hideAllScreens() {
+  ['auth-screen','pending-screen'].forEach(id => {
+    document.getElementById(id).classList.add('hidden');
+  });
+}
 function hideSplash() {
-  const splash = document.getElementById('splash');
-  splash.classList.add('fade-out');
-  setTimeout(() => {
-    splash.classList.add('hidden');
-    document.getElementById('app').classList.remove('hidden');
-  }, 550);
+  const s = document.getElementById('splash');
+  s.classList.add('fade-out');
+  setTimeout(() => s.classList.add('hidden'), 550);
+}
+function showAuthError(panel, msg) {
+  const el = document.getElementById(panel === 'login' ? 'login-error' : 'reg-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function clearAuthErrors() {
+  ['login-error','reg-error'].forEach(id => document.getElementById(id).classList.add('hidden'));
 }
 
-function showDiagnostic(title, msg) {
-  const app = document.getElementById('app');
-  app.classList.remove('hidden');
-  const icon = title.split(' ')[0];
-  const rest = title.replace(/^\S+\s/, '');
-  app.innerHTML = `
-    <div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:1.5rem">
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
-                  padding:1.75rem;max-width:480px;width:100%;text-align:center">
-        <div style="font-size:2.5rem;margin-bottom:.75rem">${icon}</div>
-        <div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;color:var(--gold);
-                    letter-spacing:.06em;margin-bottom:1rem">${rest}</div>
-        <p style="color:var(--muted);font-size:.88rem;line-height:1.7;text-align:left">${msg}</p>
-        <div style="margin-top:1.25rem;background:var(--card2);border:1px solid var(--border);
-                    border-radius:var(--radius-sm);padding:1rem;text-align:left">
-          <div style="font-size:.72rem;font-weight:900;color:var(--accent2);text-transform:uppercase;
-                      letter-spacing:.06em;margin-bottom:.5rem">Checklist</div>
-          <div style="font-size:.82rem;color:var(--text);line-height:1.9">
-            ✅ Projeto criado no supabase.com<br>
-            ✅ Tabelas criadas (SQL do SUPABASE_SETUP.md)<br>
-            ✅ Realtime ativo nas 3 tabelas<br>
-            ✅ RLS policies configuradas<br>
-            ✅ URL e anon key colados no app.js
-          </div>
+// ─── AUTH ACTIONS ───────────────────────────────────
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const pass  = document.getElementById('login-password').value;
+  clearAuthErrors();
+  if (!email || !pass) return showAuthError('login', 'Preencha e-mail e senha.');
+
+  const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+  if (error) return showAuthError('login', error.message || 'E-mail ou senha inválidos.');
+  currentUser = data.user;
+  await resolveUserRole();
+}
+
+async function doRegister() {
+  const name  = document.getElementById('reg-name').value.trim();
+  const email = document.getElementById('reg-email').value.trim();
+  const pass  = document.getElementById('reg-password').value;
+  clearAuthErrors();
+  if (!name || !email || !pass) return showAuthError('reg', 'Preencha todos os campos.');
+  if (pass.length < 6)          return showAuthError('reg', 'Senha deve ter mínimo 6 caracteres.');
+
+  const { data, error } = await sb.auth.signUp({
+    email, password: pass,
+    options: { data: { name } }
+  });
+  if (error) return showAuthError('reg', error.message || 'Erro ao criar conta.');
+
+  // Cria perfil pending
+  if (data.user) {
+    await sb.from('profiles').insert({ id: data.user.id, email, name, role: 'pending' });
+  }
+
+  // Troca para painel de login com mensagem
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('[data-auth="login"]').classList.add('active');
+  document.getElementById('auth-panel-login').classList.remove('hidden');
+  document.getElementById('auth-panel-register').classList.add('hidden');
+  showToast('Cadastro enviado! Aguarde aprovação do admin. 🎉', 'success');
+}
+
+async function doLogout() {
+  await sb.auth.signOut();
+  currentUser = null; currentProfile = null; isGuest = false;
+  document.body.classList.remove('is-admin');
+  document.getElementById('app').classList.add('hidden');
+  showAuthScreen();
+}
+
+function doGuestAccess() {
+  isGuest = true; currentUser = null; currentProfile = null;
+  isGuest = true;
+  boot_guest();
+}
+
+async function boot_guest() {
+  await Promise.all([loadTeams(), loadEntries(), loadGincanas()]);
+  applyRoleUI();
+  renderAll();
+  subscribeRealtime();
+  hideAllScreens();
+  document.getElementById('app').classList.remove('hidden');
+}
+
+// ─── ADMIN: gerenciar usuários ───────────────────────
+async function loadProfiles() {
+  const { data } = await sb.from('profiles').select('*').order('created_at');
+  profiles = data || [];
+}
+
+async function approveUser(id) {
+  await sb.from('profiles').update({ role: 'admin' }).eq('id', id);
+  await loadProfiles();
+  renderAdminPanel();
+  showToast('Usuário aprovado como Admin! ✅', 'success');
+}
+
+async function blockUser(id) {
+  await sb.from('profiles').update({ role: 'blocked' }).eq('id', id);
+  await loadProfiles();
+  renderAdminPanel();
+  showToast('Usuário bloqueado.', 'info');
+}
+
+async function revokeAdmin(id) {
+  await sb.from('profiles').update({ role: 'pending' }).eq('id', id);
+  await loadProfiles();
+  renderAdminPanel();
+  showToast('Acesso revogado.', 'info');
+}
+
+function renderAdminPanel() {
+  const pending = profiles.filter(p => p.role === 'pending');
+  const admins  = profiles.filter(p => ['admin','superadmin'].includes(p.role));
+
+  const pendCount = document.getElementById('pending-count');
+  pendCount.textContent = pending.length || '';
+
+  const pendList = document.getElementById('pending-list');
+  if (!pending.length) {
+    pendList.innerHTML = `<div class="empty-state"><span class="empty-icon">✅</span>Nenhuma solicitação pendente.</div>`;
+  } else {
+    pendList.innerHTML = pending.map(p => `
+      <div class="admin-user-item">
+        <div class="admin-user-info">
+          <div class="admin-user-name">${escHtml(p.name||p.email)}</div>
+          <div class="admin-user-email">${escHtml(p.email)}</div>
         </div>
-        <button onclick="location.reload()"
-          style="margin-top:1.25rem;background:linear-gradient(135deg,var(--gold),var(--gold2));
-                 color:var(--bg);border:none;border-radius:var(--radius-sm);padding:.8rem 2rem;
-                 font-family:'Nunito',sans-serif;font-weight:900;font-size:.95rem;cursor:pointer;width:100%">
-          🔄 Tentar Novamente
-        </button>
+        <span class="admin-user-role role-pending">PENDENTE</span>
+        <div class="admin-user-actions">
+          <button class="btn-approve" data-approve="${p.id}">✅ Aprovar</button>
+          <button class="btn-block"   data-block="${p.id}">🚫</button>
+        </div>
+      </div>`).join('');
+    pendList.querySelectorAll('[data-approve]').forEach(b => b.addEventListener('click', () => approveUser(b.dataset.approve)));
+    pendList.querySelectorAll('[data-block]').forEach(b => b.addEventListener('click', () => blockUser(b.dataset.block)));
+  }
+
+  const adminList = document.getElementById('admins-list');
+  adminList.innerHTML = admins.map(p => `
+    <div class="admin-user-item">
+      <div class="admin-user-info">
+        <div class="admin-user-name">${escHtml(p.name||p.email)}</div>
+        <div class="admin-user-email">${escHtml(p.email)}</div>
       </div>
-    </div>`;
+      <span class="admin-user-role ${p.role==='superadmin'?'role-superadmin':'role-admin'}">
+        ${p.role==='superadmin'?'SUPER ADMIN':'ADMIN'}
+      </span>
+      ${p.role !== 'superadmin' ? `
+      <div class="admin-user-actions">
+        <button class="btn-block" data-revoke="${p.id}" title="Revogar">↩️</button>
+      </div>` : ''}
+    </div>`).join('');
+  adminList.querySelectorAll('[data-revoke]').forEach(b => b.addEventListener('click', () => revokeAdmin(b.dataset.revoke)));
 }
 
-// ─── SUPABASE LOAD ──────────────────────────────────
+// ─── SUPABASE DATA ───────────────────────────────────
 async function loadTeams() {
   const { data, error } = await sb.from('teams').select('*').order('created_at');
   if (error) return { error };
@@ -179,64 +358,40 @@ async function loadGincanas() {
   gincanas = data || [];
 }
 
-// ─── REALTIME ───────────────────────────────────────
 function subscribeRealtime() {
   sb.channel('ejc-realtime')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'teams' }, async () => {
-      await loadTeams(); renderAll();
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'entries' }, async () => {
-      await loadEntries(); renderAll();
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'gincanas' }, async () => {
-      await loadGincanas(); renderAll();
-    })
+    .on('postgres_changes', { event:'*', schema:'public', table:'teams' },    async () => { await loadTeams();    renderAll(); })
+    .on('postgres_changes', { event:'*', schema:'public', table:'entries' },  async () => { await loadEntries();  renderAll(); })
+    .on('postgres_changes', { event:'*', schema:'public', table:'gincanas' }, async () => { await loadGincanas(); renderAll(); })
+    .on('postgres_changes', { event:'*', schema:'public', table:'profiles' }, async () => { await loadProfiles(); renderAdminPanel(); })
     .subscribe();
 }
 
 // ─── DATE UTILS ─────────────────────────────────────
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => new Date().toISOString().slice(0,10);
 function getWeekRange() {
-  const now = new Date(), mon = new Date(now);
-  mon.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-  return { start: mon.toISOString().slice(0,10), end: sun.toISOString().slice(0,10) };
+  const now=new Date(), mon=new Date(now);
+  mon.setDate(now.getDate()-((now.getDay()+6)%7));
+  const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+  return { start:mon.toISOString().slice(0,10), end:sun.toISOString().slice(0,10) };
 }
 function getMonthRange() {
-  const now = new Date(), y = now.getFullYear(), m = now.getMonth();
-  return {
-    start: `${y}-${String(m+1).padStart(2,'0')}-01`,
-    end:   `${y}-${String(m+1).padStart(2,'0')}-${new Date(y,m+1,0).getDate()}`
-  };
+  const now=new Date(), y=now.getFullYear(), m=now.getMonth();
+  return { start:`${y}-${String(m+1).padStart(2,'0')}-01`, end:`${y}-${String(m+1).padStart(2,'0')}-${new Date(y,m+1,0).getDate()}` };
 }
-function getYearRange() {
-  const y = new Date().getFullYear();
-  return { start:`${y}-01-01`, end:`${y}-12-31` };
-}
-function fmtDate(iso) {
-  if (!iso) return '';
-  const [y,m,d] = iso.split('-');
-  return `${d}/${m}/${y}`;
-}
-function escHtml(s) {
-  return String(s||'')
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+function getYearRange() { const y=new Date().getFullYear(); return { start:`${y}-01-01`, end:`${y}-12-31` }; }
+function fmtDate(iso) { if(!iso) return ''; const [y,m,d]=iso.split('-'); return `${d}/${m}/${y}`; }
+function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ─── HELPERS ────────────────────────────────────────
-function teamById(id) { return teams.find(t => t.id === id); }
-function ginById(id)  { return gincanas.find(g => g.id === id); }
+function teamById(id) { return teams.find(t=>t.id===id); }
+function ginById(id)  { return gincanas.find(g=>g.id===id); }
 
 function calcRanking(entryList) {
   const totals = {};
-  teams.forEach(t => { totals[t.id] = 0; });
-  entryList.forEach(e => {
-    if (e.team_id in totals) totals[e.team_id] += Number(e.points);
-  });
-  return teams
-    .map(t => ({ id:t.id, name:t.name, color:t.color, pts: totals[t.id]||0 }))
-    .sort((a,b) => b.pts - a.pts);
+  teams.forEach(t => { totals[t.id]=0; });
+  entryList.forEach(e => { if(e.team_id in totals) totals[e.team_id]+=Number(e.points); });
+  return teams.map(t=>({ id:t.id, name:t.name, color:t.color, pts:totals[t.id]||0 })).sort((a,b)=>b.pts-a.pts);
 }
 
 // ─── MASTER RENDER ──────────────────────────────────
@@ -248,857 +403,269 @@ function renderAll() {
   renderEquipesTab();
   renderGincanasTab();
   renderCalcTab();
+  renderReport();
+  if (currentProfile?.role === 'superadmin') renderAdminPanel();
   populateSelects();
-  if (!document.getElementById('tab-charts').classList.contains('hidden')) {
-    renderCharts();
-  }
+  if (!document.getElementById('tab-charts').classList.contains('hidden')) renderCharts();
 }
 
-// ─── GLOBAL FILTER UI ───────────────────────────────
 function updateGlobalFilterUI() {
   document.getElementById('gf-active-label').textContent = getFilterLabel();
-  const sel = document.getElementById('gf-gin-select');
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">— escolha a competição —</option>' +
-    gincanas.map(g =>
-      `<option value="${g.id}">${escHtml(g.name)}${g.data_gin ? ' — '+fmtDate(g.data_gin) : ''}</option>`
-    ).join('');
-  if (cur && sel.querySelector(`option[value="${cur}"]`)) sel.value = cur;
+  const sel=document.getElementById('gf-gin-select'), cur=sel.value;
+  sel.innerHTML='<option value="">— escolha a competição —</option>'+
+    gincanas.map(g=>`<option value="${g.id}">${escHtml(g.name)}${g.data_gin?' — '+fmtDate(g.data_gin):''}</option>`).join('');
+  if(cur&&sel.querySelector(`option[value="${cur}"]`)) sel.value=cur;
 }
 
-// Mostra/oculta o filtro global conforme a aba ativa
 function toggleFilterBarVisibility(tabName) {
-  const bar = document.getElementById('global-filter-bar');
-  const hiddenTabs = ['equipes', 'gincanas', 'calc'];
-  if (hiddenTabs.includes(tabName)) {
-    bar.classList.add('hidden-filter');
-  } else {
-    bar.classList.remove('hidden-filter');
-  }
+  const bar=document.getElementById('global-filter-bar');
+  const hiddenTabs=['equipes','gincanas','calc','adminpanel','report'];
+  bar.classList.toggle('hidden-filter', hiddenTabs.includes(tabName));
 }
 
 // ─── HOME ────────────────────────────────────────────
 function renderHome() {
-  const filtered = getFilteredEntries();
-
-  // Label do período no título
   document.getElementById('home-period-label').textContent = getFilterLabel();
-  document.getElementById('home-entries-label').textContent =
-    filtered.length ? `${filtered.length} lançamento${filtered.length > 1 ? 's' : ''}` : '';
-
+  const filtered = getFilteredEntries();
+  document.getElementById('home-entries-label').textContent = filtered.length ? `${filtered.length} lançamento${filtered.length>1?'s':''}` : '';
   renderTop3(calcRanking(filtered));
-
-  const sorted = [...filtered].sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-  const list = document.getElementById('today-list');
-
-  if (!sorted.length) {
-    list.innerHTML = `<div class="empty-state">
-      <span class="empty-icon">🎯</span>
-      Nenhum lançamento neste período ainda.
-    </div>`;
-    return;
-  }
-  list.innerHTML = sorted.map(e => {
-    const neg  = e.points < 0;
-    const team = teamById(e.team_id);
-    const gin  = e.gin_id ? ginById(e.gin_id) : null;
-    return `<div class="score-item ${neg ? 'punishment' : ''}">
+  const sorted = [...filtered].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
+  const list=document.getElementById('today-list');
+  if(!sorted.length) { list.innerHTML=`<div class="empty-state"><span class="empty-icon">🎯</span>Nenhum lançamento neste período.</div>`; return; }
+  list.innerHTML=sorted.map(e=>{
+    const neg=e.points<0, team=teamById(e.team_id), gin=e.gin_id?ginById(e.gin_id):null;
+    return `<div class="score-item ${neg?'punishment':''}">
       <div>
-        <div class="score-team">${escHtml(team?.name||'?')}
-          ${neg ? '<span class="score-badge-pun">PUNIÇÃO</span>' : ''}
-        </div>
-        ${gin        ? `<div class="score-desc">🎯 ${escHtml(gin.name)}</div>` : ''}
-        ${e.descricao? `<div class="score-desc">${escHtml(e.descricao)}</div>` : ''}
+        <div class="score-team">${escHtml(team?.name||'?')}${neg?'<span class="score-badge-pun">PUNIÇÃO</span>':''}</div>
+        ${gin?`<div class="score-desc">🎯 ${escHtml(gin.name)}</div>`:''}
+        ${e.descricao?`<div class="score-desc">${escHtml(e.descricao)}</div>`:''}
         <div class="score-desc">📅 ${fmtDate(e.data_entry)}</div>
       </div>
-      <div class="score-pts ${neg ? 'negative' : ''}">${e.points>0?'+':''}${e.points}</div>
+      <div class="score-pts ${neg?'negative':''}">${e.points>0?'+':''}${e.points}</div>
     </div>`;
   }).join('');
 }
 
 function renderTop3(ranking) {
-  const medals = ['🥇','🥈','🥉'], labels = ['1º','2º','3º'];
-  const top  = ranking.slice(0, 3);
-  const grid = document.getElementById('top3-cards');
-  if (!top.length) {
-    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
-      <span class="empty-icon">👥</span>Cadastre equipes para começar!
-    </div>`;
-    return;
-  }
-  grid.innerHTML = top.map((t,i) => `
-    <div class="top3-card rank-${i+1}">
-      <span class="top3-medal">${medals[i]}</span>
-      <div class="top3-name" title="${escHtml(t.name)}">${escHtml(t.name)}</div>
-      <div class="top3-pts ${t.pts<0?'negative':''}">${t.pts}</div>
-      <span class="top3-badge">${labels[i]}</span>
-    </div>`).join('');
+  const medals=['🥇','🥈','🥉'], labels=['1º','2º','3º'], top=ranking.slice(0,3);
+  const grid=document.getElementById('top3-cards');
+  if(!top.length){grid.innerHTML=`<div class="empty-state" style="grid-column:1/-1"><span class="empty-icon">👥</span>Cadastre equipes!</div>`;return;}
+  grid.innerHTML=top.map((t,i)=>`<div class="top3-card rank-${i+1}"><span class="top3-medal">${medals[i]}</span><div class="top3-name" title="${escHtml(t.name)}">${escHtml(t.name)}</div><div class="top3-pts ${t.pts<0?'negative':''}">${t.pts}</div><span class="top3-badge">${labels[i]}</span></div>`).join('');
 }
 
-// ── RANKING ──────────────────────────────────────────
+// ─── RANKING ─────────────────────────────────────────
 function renderRanking() {
-  const ranking = calcRanking(getFilteredEntries());
-  const list = document.getElementById('ranking-list');
-  if (!ranking.length) {
-    list.innerHTML = `<div class="empty-state"><span class="empty-icon">🏆</span>Nenhum dado para este filtro.</div>`;
-    return;
-  }
-  const posClass = i => ['gold','silver','bronze'][i]||'normal';
-  list.innerHTML = ranking.map((t,i) => `
-    <div class="rank-item ${i<3?'rank-'+(i+1):''}">
-      <span class="rank-pos ${posClass(i)}">${i+1}</span>
-      <span class="rank-dot" style="background:${t.color}"></span>
-      <span class="rank-name">${escHtml(t.name)}</span>
-      <div>
-        <div class="rank-pts ${t.pts<0?'negative':''}">${t.pts}</div>
-        <div class="rank-sub">pts</div>
-      </div>
-    </div>`).join('');
+  const ranking=calcRanking(getFilteredEntries());
+  const list=document.getElementById('ranking-list');
+  if(!ranking.length){list.innerHTML=`<div class="empty-state"><span class="empty-icon">🏆</span>Nenhum dado para este filtro.</div>`;return;}
+  const posClass=i=>['gold','silver','bronze'][i]||'normal';
+  list.innerHTML=ranking.map((t,i)=>`<div class="rank-item ${i<3?'rank-'+(i+1):''}"><span class="rank-pos ${posClass(i)}">${i+1}</span><span class="rank-dot" style="background:${t.color}"></span><span class="rank-name">${escHtml(t.name)}</span><div><div class="rank-pts ${t.pts<0?'negative':''}">${t.pts}</div><div class="rank-sub">pts</div></div></div>`).join('');
 }
 
-// ── CHARTS ───────────────────────────────────────────
+// ─── CHARTS ──────────────────────────────────────────
 function renderCharts() {
-  const filtered = getFilteredEntries();
-  const ranking  = calcRanking(filtered);
-
-  // Determinar range de datas para o eixo X
+  const filtered=getFilteredEntries(), ranking=calcRanking(filtered);
   let days;
-  if (filterState.mode === 'gin') {
-    const gin = ginById(filterState.ginId);
-    if (gin && gin.data_gin) {
-      days = [gin.data_gin];
-    } else if (filtered.length) {
-      const dates = filtered.map(e => e.data_entry).sort();
-      days = getDaysInRange(dates[0], dates[dates.length-1]);
-    } else {
-      days = [today()];
-    }
-  } else if (filterState.mode === 'custom' && filterState.customFrom && filterState.customTo) {
-    days = getDaysInRange(filterState.customFrom, filterState.customTo);
-  } else {
-    switch(filterState.period) {
-      case 'today': days = [today()]; break;
-      case 'week':  { const w=getWeekRange();  days=getDaysInRange(w.start,w.end); break; }
-      case 'month': { const m=getMonthRange(); days=getDaysInRange(m.start,m.end); break; }
-      case 'year':  { const y=getYearRange();  days=getDaysInRange(y.start,y.end); break; }
-      case 'all': {
-        if (filtered.length) {
-          const dates = filtered.map(e=>e.data_entry).sort();
-          days = getDaysInRange(dates[0], dates[dates.length-1]);
-        } else { days=[today()]; }
-        break;
-      }
-      default: days=[today()];
-    }
-  }
-
-  // Bar chart horizontal
-  const barCtx = document.getElementById('chart-bar').getContext('2d');
-  if (barChart) barChart.destroy();
-  barChart = new Chart(barCtx, {
-    type: 'bar',
-    data: {
-      labels: ranking.map(t=>t.name),
-      datasets: [{
-        data: ranking.map(t=>t.pts),
-        backgroundColor: ranking.map(t=>t.color+'bb'),
-        borderColor: ranking.map(t=>t.color),
-        borderWidth: 2, borderRadius: 8
-      }]
-    },
-    options: {
-      indexAxis:'y', responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>` ${c.raw} pts`}} },
-      scales:{
-        x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#a78bb5',font:{family:'Nunito'}}},
-        y:{grid:{display:false},ticks:{color:'#f0e6ff',font:{family:'Nunito',weight:'700'},maxRotation:0}}
-      }
-    }
-  });
-
-  // Line chart — evolução acumulada
-  const datasets = teams.map(team => {
-    const color = team.color||'#888';
-    return {
-      label: team.name,
-      data: days.map(d =>
-        filtered.filter(e=>e.team_id===team.id && e.data_entry<=d)
-                .reduce((s,e)=>s+Number(e.points),0)
-      ),
-      borderColor: color,
-      backgroundColor: color+'22',
-      tension:.4, fill:true,
-      pointRadius:3, pointBackgroundColor:color
-    };
-  });
-
-  const lineCtx = document.getElementById('chart-line').getContext('2d');
-  if (lineChart) lineChart.destroy();
-  lineChart = new Chart(lineCtx, {
-    type: 'line',
-    data: { labels: days.map(d=>d.slice(5).replace('-','/')), datasets },
-    options: {
-      responsive:true, maintainAspectRatio:false,
-      plugins:{legend:{labels:{color:'#a78bb5',font:{family:'Nunito',size:11},boxWidth:12}}},
-      scales:{
-        x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#a78bb5',font:{family:'Nunito',size:11}}},
-        y:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#a78bb5',font:{family:'Nunito'}}}
-      }
-    }
-  });
+  if(filterState.mode==='gin'){const g=ginById(filterState.ginId);days=g?.data_gin?[g.data_gin]:(filtered.length?getDaysInRange(filtered.map(e=>e.data_entry||today()).sort()[0],filtered.map(e=>e.data_entry||today()).sort().slice(-1)[0]):[today()]);}
+  else if(filterState.mode==='custom'&&filterState.customFrom&&filterState.customTo){days=getDaysInRange(filterState.customFrom,filterState.customTo);}
+  else{switch(filterState.period){case'today':days=[today()];break;case'week':{const w=getWeekRange();days=getDaysInRange(w.start,w.end);break;}case'month':{const m=getMonthRange();days=getDaysInRange(m.start,m.end);break;}case'year':{const y=getYearRange();days=getDaysInRange(y.start,y.end);break;}case'all':default:days=filtered.length?getDaysInRange(filtered.map(e=>e.data_entry||today()).sort()[0],filtered.map(e=>e.data_entry||today()).sort().slice(-1)[0]):[today()];}}
+  const barCtx=document.getElementById('chart-bar').getContext('2d');
+  if(barChart)barChart.destroy();
+  barChart=new Chart(barCtx,{type:'bar',data:{labels:ranking.map(t=>t.name),datasets:[{data:ranking.map(t=>t.pts),backgroundColor:ranking.map(t=>t.color+'bb'),borderColor:ranking.map(t=>t.color),borderWidth:2,borderRadius:8}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw} pts`}}},scales:{x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#a78bb5',font:{family:'Nunito'}}},y:{grid:{display:false},ticks:{color:'#f0e6ff',font:{family:'Nunito',weight:'700'},maxRotation:0}}}}});
+  const datasets=teams.map(team=>({label:team.name,data:days.map(d=>filtered.filter(e=>e.team_id===team.id&&(e.data_entry||'')<=d).reduce((s,e)=>s+Number(e.points),0)),borderColor:team.color||'#888',backgroundColor:(team.color||'#888')+'22',tension:.4,fill:true,pointRadius:3,pointBackgroundColor:team.color||'#888'}));
+  const lineCtx=document.getElementById('chart-line').getContext('2d');
+  if(lineChart)lineChart.destroy();
+  lineChart=new Chart(lineCtx,{type:'line',data:{labels:days.map(d=>d.slice(5).replace('-','/')),datasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#a78bb5',font:{family:'Nunito',size:11},boxWidth:12}}},scales:{x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#a78bb5',font:{family:'Nunito',size:11}}},y:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#a78bb5',font:{family:'Nunito'}}}}}});
 }
+function getDaysInRange(start,end){const days=[],cur=new Date(start),last=new Date(end);while(cur<=last){days.push(cur.toISOString().slice(0,10));cur.setDate(cur.getDate()+1);}return days;}
 
-function getDaysInRange(start, end) {
-  const days=[], cur=new Date(start), last=new Date(end);
-  while(cur<=last){ days.push(cur.toISOString().slice(0,10)); cur.setDate(cur.getDate()+1); }
-  return days;
-}
-
-// ── HISTORY ──────────────────────────────────────────
+// ─── HISTORY ─────────────────────────────────────────
 function renderHistory() {
-  const base = getFilteredEntries();
-  const all = base
-    .filter(e => {
-      if (!historyFilter) return true;
-      return (teamById(e.team_id)?.name||'').toLowerCase().includes(historyFilter.toLowerCase());
-    })
-    .sort((a,b) => {
-      // Segurança: trata campos nulos/undefined antes do localeCompare
-      const da = a.data_entry || '';
-      const db = b.data_entry || '';
-      const dc = db.localeCompare(da);
-      return dc!==0 ? dc : new Date(b.created_at||0) - new Date(a.created_at||0);
-    });
-
-  const list = document.getElementById('history-list');
-  if (!all.length) {
-    list.innerHTML = `<div class="empty-state"><span class="empty-icon">📋</span>Nenhum lançamento encontrado.</div>`;
-    return;
-  }
-  list.innerHTML = all.map(e => {
-    const neg  = e.points<0;
-    const team = teamById(e.team_id);
-    const gin  = e.gin_id ? ginById(e.gin_id) : null;
-    const parts = (e.data_entry||'--').split('-');
-    const [y,m,d] = parts.length===3 ? parts : ['?','?','?'];
+  const isAdmin = !isGuest && ['admin','superadmin'].includes(currentProfile?.role);
+  const base=getFilteredEntries();
+  const all=base.filter(e=>{
+    if(!historyFilter)return true;
+    return(teamById(e.team_id)?.name||'').toLowerCase().includes(historyFilter.toLowerCase());
+  }).sort((a,b)=>{
+    const da=a.data_entry||'', db=b.data_entry||'';
+    const dc=db.localeCompare(da);
+    return dc!==0?dc:new Date(b.created_at||0)-new Date(a.created_at||0);
+  });
+  const list=document.getElementById('history-list');
+  if(!all.length){list.innerHTML=`<div class="empty-state"><span class="empty-icon">📋</span>Nenhum lançamento encontrado.</div>`;return;}
+  list.innerHTML=all.map(e=>{
+    const neg=e.points<0, team=teamById(e.team_id), gin=e.gin_id?ginById(e.gin_id):null;
+    const parts=(e.data_entry||'--').split('-'), [y,m,d]=parts.length===3?parts:['?','?','?'];
     return `<div class="history-item ${neg?'punishment':''}">
       <div class="history-main">
-        <div class="history-team">${escHtml(team?.name||'?')}
-          ${neg?'<span class="score-badge-pun">PUNIÇÃO</span>':''}
-        </div>
+        <div class="history-team">${escHtml(team?.name||'?')}${neg?'<span class="score-badge-pun">PUNIÇÃO</span>':''}</div>
         <div class="history-meta">${d}/${m}/${y} · ${e.tipo==='punishment'?'Punição':'Pontuação'}</div>
-        ${gin        ? `<div class="history-gin">🎯 ${escHtml(gin.name)}</div>` : ''}
-        ${e.descricao? `<div class="history-desc">${escHtml(e.descricao)}</div>` : ''}
+        ${gin?`<div class="history-gin">🎯 ${escHtml(gin.name)}</div>`:''}
+        ${e.descricao?`<div class="history-desc">${escHtml(e.descricao)}</div>`:''}
       </div>
       <div class="history-right">
         <div class="history-pts ${neg?'negative':''}">${e.points>0?'+':''}${e.points}</div>
-        ${e.completion_time
-          ? `<div class="history-time">⏱ ${escHtml(e.completion_time)}</div>`
-          : ''}
-        <div class="history-actions">
-          <button class="btn-edit"   data-edit-entry="${e.id}" title="Editar">✏️</button>
-          <button class="btn-delete" data-del-entry="${e.id}"  title="Excluir">🗑</button>
-        </div>
+        ${e.completion_time?`<div class="history-time">⏱ ${escHtml(e.completion_time)}</div>`:''}
+        ${isAdmin?`<div class="history-actions"><button class="btn-edit" data-edit-entry="${e.id}">✏️</button><button class="btn-delete" data-del-entry="${e.id}">🗑</button></div>`:''}
       </div>
     </div>`;
   }).join('');
-
-  list.querySelectorAll('[data-edit-entry]').forEach(btn =>
-    btn.addEventListener('click', () => openEditEntry(btn.dataset.editEntry)));
-  list.querySelectorAll('[data-del-entry]').forEach(btn =>
-    btn.addEventListener('click', () => confirmDeleteEntry(btn.dataset.delEntry)));
-}
-
-// ── ENTRY CRUD ───────────────────────────────────────
-function openEditEntry(id) {
-  const e = entries.find(x => x.id === id);
-  if (!e) return;
-
-  const teamOpts = teams.map(t =>
-    `<option value="${t.id}" ${t.id===e.team_id?'selected':''}>${escHtml(t.name)}</option>`
-  ).join('');
-  const ginOpts = gincanas.map(g =>
-    `<option value="${g.id}" ${g.id===e.gin_id?'selected':''}>${escHtml(g.name)}</option>`
-  ).join('');
-
-  document.getElementById('edit-entry-id').value       = e.id;
-  document.getElementById('edit-entry-team').innerHTML  = '<option value="">— selecione —</option>' + teamOpts;
-  document.getElementById('edit-entry-gin').innerHTML   = '<option value="">— nenhuma —</option>' + ginOpts;
-  document.getElementById('edit-entry-pts').value       = e.points;
-  document.getElementById('edit-entry-desc').value      = e.descricao || '';
-  document.getElementById('edit-entry-date').value      = e.data_entry;
-
-  // Preenche campos de tempo se existir
-  if (e.completion_time) {
-    const parts = e.completion_time.split(':');
-    document.getElementById('edit-time-min').value = parts[0]||'';
-    document.getElementById('edit-time-sec').value = parts[1]||'';
-    document.getElementById('edit-time-ms').value  = parts[2]||'';
-  } else {
-    clearTimeInputs('edit-time-min','edit-time-sec','edit-time-ms');
-  }
-
-  const box = document.getElementById('modal-edit-entry').querySelector('.modal-box');
-  if (e.tipo === 'punishment') {
-    box.classList.add('punishment-box');
-    document.getElementById('edit-entry-modal-title').textContent = '⚠️ Editar Punição';
-  } else {
-    box.classList.remove('punishment-box');
-    document.getElementById('edit-entry-modal-title').textContent = '✏️ Editar Lançamento';
-  }
-
-  openModal('modal-edit-entry');
-}
-
-async function saveEditEntry() {
-  const id         = document.getElementById('edit-entry-id').value;
-  const team_id    = document.getElementById('edit-entry-team').value;
-  const gin_id     = document.getElementById('edit-entry-gin').value;
-  const points     = Number(document.getElementById('edit-entry-pts').value);
-  const descricao  = document.getElementById('edit-entry-desc').value.trim();
-  const data_entry = document.getElementById('edit-entry-date').value;
-  const completionTime = buildCompletionTime('edit-time-min','edit-time-sec','edit-time-ms');
-
-  if (!team_id)                return showToast('Selecione uma equipe!','error');
-  if (!points || isNaN(points)) return showToast('Informe a pontuação!','error');
-  if (!data_entry)             return showToast('Informe a data!','error');
-
-  const entry = entries.find(x => x.id === id);
-  const tipo  = entry?.tipo || (points < 0 ? 'punishment' : 'bonus');
-
-  const { error } = await sb.from('entries').update({
-    team_id, gin_id: gin_id||null, points, descricao, data_entry, tipo,
-    completion_time: completionTime||null
-  }).eq('id', id);
-
-  if (error) { console.error(error); return showToast('Erro: '+(error.message||'falha ao salvar'),'error'); }
-  closeModal('modal-edit-entry');
-  showToast('Lançamento atualizado! ✅','success');
-}
-
-function confirmDeleteEntry(id) {
-  const e    = entries.find(x => x.id === id);
-  if (!e) return;
-  const team = teamById(e.team_id);
-  const neg  = e.points < 0;
-  document.getElementById('confirm-title').textContent = 'Excluir Lançamento';
-  document.getElementById('confirm-message').innerHTML =
-    `Excluir o lançamento de <strong>${neg?'':'+'}${e.points} pts</strong> ` +
-    `para <strong>${escHtml(team?.name||'?')}</strong> em <strong>${fmtDate(e.data_entry)}</strong>?` +
-    `<br><br>⚠️ Esta ação <strong>não pode ser desfeita</strong>.`;
-  confirmCallback = () => deleteEntry(id);
-  openModal('modal-confirm');
-}
-
-async function deleteEntry(id) {
-  const { error } = await sb.from('entries').delete().eq('id', id);
-  if (error) { console.error(error); return showToast('Erro: '+(error.message||'falha ao excluir'), 'error'); }
-  showToast('Lançamento excluído.', 'info');
-}
-
-// ── EQUIPES ───────────────────────────────────────────
-function renderEquipesTab() {
-  const list  = document.getElementById('teams-list');
-  const count = document.getElementById('teams-count');
-  count.textContent = teams.length||'';
-
-  if (!teams.length) {
-    list.innerHTML = `<div class="empty-state"><span class="empty-icon">👥</span>Nenhuma equipe cadastrada ainda.</div>`;
-    return;
-  }
-  const totals = {};
-  entries.forEach(e => { totals[e.team_id]=(totals[e.team_id]||0)+Number(e.points); });
-
-  list.innerHTML = teams.map(t => {
-    const pts = totals[t.id]||0;
-    return `<div class="team-entity-item">
-      <span class="team-dot" style="background:${t.color}"></span>
-      <div class="team-entity-info">
-        <div class="team-entity-name">${escHtml(t.name)}</div>
-        <div class="team-entity-sub">Saldo acumulado</div>
-      </div>
-      <div class="team-entity-pts ${pts<0?'negative':''}">${pts>=0?'+':''}${pts}</div>
-      <div class="entity-actions">
-        <button class="btn-edit"   data-edit-team="${t.id}">✏️</button>
-        <button class="btn-delete" data-del-team="${t.id}">🗑</button>
-      </div>
-    </div>`;
-  }).join('');
-
-  list.querySelectorAll('[data-edit-team]').forEach(btn=>btn.addEventListener('click',()=>startEditTeam(btn.dataset.editTeam)));
-  list.querySelectorAll('[data-del-team]').forEach(btn=>btn.addEventListener('click',()=>confirmDeleteTeam(btn.dataset.delTeam)));
-}
-
-function startEditTeam(id) {
-  const team=teams.find(t=>t.id===id); if(!team) return;
-  editingTeamId=id;
-  document.getElementById('team-name-input').value =team.name;
-  document.getElementById('team-color-input').value=team.color;
-  document.getElementById('team-form-title').textContent='✏️ Editar Equipe';
-  document.getElementById('team-form-title').classList.add('editing-mode');
-  document.getElementById('team-form-card').classList.add('editing');
-  document.getElementById('btn-team-save').textContent='Salvar Alterações';
-  document.getElementById('btn-team-save').classList.add('blue-mode');
-  document.getElementById('btn-team-cancel').style.display='';
-  document.getElementById('team-form-card').scrollIntoView({behavior:'smooth',block:'start'});
-}
-function cancelEditTeam() {
-  editingTeamId=null;
-  document.getElementById('team-name-input').value='';
-  document.getElementById('team-color-input').value='#f59e0b';
-  document.getElementById('team-form-title').textContent='✨ Nova Equipe';
-  document.getElementById('team-form-title').classList.remove('editing-mode');
-  document.getElementById('team-form-card').classList.remove('editing');
-  document.getElementById('btn-team-save').textContent='+ Adicionar Equipe';
-  document.getElementById('btn-team-save').classList.remove('blue-mode');
-  document.getElementById('btn-team-cancel').style.display='none';
-}
-async function saveTeam() {
-  const name =document.getElementById('team-name-input').value.trim();
-  const color=document.getElementById('team-color-input').value;
-  if(!name) return showToast('Digite o nome da equipe!','error');
-  const dup=teams.find(t=>t.name.toLowerCase()===name.toLowerCase()&&t.id!==editingTeamId);
-  if(dup) return showToast('Já existe uma equipe com esse nome!','error');
-
-  if(editingTeamId) {
-    const {error}=await sb.from('teams').update({name,color}).eq('id',editingTeamId);
-    if(error){console.error(error);return showToast('Erro: '+(error.message||'falha ao atualizar'),'error');}
-    showToast(`Equipe "${name}" atualizada! ✅`,'success');
-    cancelEditTeam();
-  } else {
-    const {error}=await sb.from('teams').insert({name,color});
-    if(error){console.error(error);return showToast('Erro: '+(error.message||'falha ao criar'),'error');}
-    showToast(`Equipe "${name}" criada! 🙌`,'success');
-    document.getElementById('team-name-input').value='';
+  if(isAdmin){
+    list.querySelectorAll('[data-edit-entry]').forEach(btn=>btn.addEventListener('click',()=>openEditEntry(btn.dataset.editEntry)));
+    list.querySelectorAll('[data-del-entry]').forEach(btn=>btn.addEventListener('click',()=>confirmDeleteEntry(btn.dataset.delEntry)));
   }
 }
-function confirmDeleteTeam(id) {
-  const team=teams.find(t=>t.id===id); if(!team) return;
-  const n=entries.filter(e=>e.team_id===id).length;
-  document.getElementById('confirm-title').textContent='Excluir Equipe';
-  document.getElementById('confirm-message').innerHTML=
-    `Excluir a equipe <strong>${escHtml(team.name)}</strong>?`+
-    (n>0?`<br><br>⚠️ Existem <strong>${n} lançamentos</strong> vinculados. Eles <strong>não serão apagados</strong>.`:'');
-  confirmCallback=()=>deleteTeam(id);
-  openModal('modal-confirm');
-}
-async function deleteTeam(id) {
-  const {error}=await sb.from('teams').delete().eq('id',id);
-  if(error){console.error(error);return showToast('Erro: '+(error.message||'falha ao excluir'),'error');}
-  if(editingTeamId===id) cancelEditTeam();
-  showToast('Equipe excluída.','info');
-}
 
-// ── GINCANAS ──────────────────────────────────────────
-function renderGincanasTab() {
-  const list  = document.getElementById('gincanas-list');
-  const count = document.getElementById('gincanas-count');
-  count.textContent = gincanas.length||'';
-
-  if(!gincanas.length) {
-    list.innerHTML=`<div class="empty-state"><span class="empty-icon">🎯</span>Nenhuma gincana cadastrada ainda.</div>`;
-    return;
+// ─── RELATÓRIO / EXPORTAÇÃO ──────────────────────────
+function renderReport() {
+  const period = document.getElementById('report-period-select')?.value || 'week';
+  let start, end, label;
+  switch(period) {
+    case 'today': start=end=today(); label='Hoje — '+fmtDate(today()); break;
+    case 'week':  { const w=getWeekRange();  start=w.start; end=w.end; label=`Semana: ${fmtDate(w.start)} – ${fmtDate(w.end)}`; break; }
+    case 'month': { const m=getMonthRange(); start=m.start; end=m.end; const n=new Date(); label=`${n.toLocaleString('pt-BR',{month:'long'})} ${n.getFullYear()}`; break; }
+    case 'year':  { const y=getYearRange();  start=y.start; end=y.end; label=`Ano ${new Date().getFullYear()}`; break; }
+    case 'all':   start=null; end=null; label='Todo o histórico'; break;
   }
-  list.innerHTML=gincanas.map(g=>{
-    const hasObs=g.obs&&g.obs.trim().length>0;
-    return `<div class="gin-entity-item">
-      <div class="gin-entity-header">
-        <span class="gin-entity-name">🎯 ${escHtml(g.name)}</span>
-        <div class="entity-actions">
-          <button class="btn-edit"   data-edit-gin="${g.id}">✏️</button>
-          <button class="btn-delete" data-del-gin="${g.id}">🗑</button>
-        </div>
-      </div>
-      <div class="gin-entity-meta">
-        ${g.data_gin  ?`<span class="gin-entity-date">📅 ${fmtDate(g.data_gin)}</span>`:''}
-        ${g.max_pts   ?`<span class="gin-entity-maxpts">${g.max_pts} pts máx.</span>`:''}
-      </div>
-      ${hasObs?`<div class="gin-entity-obs-preview">${escHtml(g.obs)}</div>
-        <button class="gin-see-more" data-view-gin="${g.id}">Ver dinâmica completa →</button>`:''}
-    </div>`;
-  }).join('');
-
-  list.querySelectorAll('[data-edit-gin]').forEach(btn=>btn.addEventListener('click',()=>startEditGin(btn.dataset.editGin)));
-  list.querySelectorAll('[data-del-gin]').forEach(btn=>btn.addEventListener('click',()=>confirmDeleteGin(btn.dataset.delGin)));
-  list.querySelectorAll('[data-view-gin]').forEach(btn=>btn.addEventListener('click',()=>viewGinDetail(btn.dataset.viewGin)));
-}
-
-function startEditGin(id) {
-  const g=gincanas.find(x=>x.id===id); if(!g) return;
-  editingGinId=id;
-  document.getElementById('gin-name-input').value  =g.name;
-  document.getElementById('gin-date-input').value  =g.data_gin||'';
-  document.getElementById('gin-maxpts-input').value=g.max_pts||'';
-  document.getElementById('gin-obs-input').value   =g.obs||'';
-  // Restore scoring type
-  const st = g.scoring_type||'points';
-  document.getElementById('gin-scoring-type').value = st;
-  document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById(st==='time'?'gin-type-time':'gin-type-points').classList.add('active');
-
-  document.getElementById('gin-form-title').textContent='✏️ Editar Gincana';
-  document.getElementById('gin-form-title').classList.add('editing-mode');
-  document.getElementById('gin-form-card').classList.add('editing');
-  document.getElementById('btn-gin-save').textContent='Salvar Alterações';
-  document.getElementById('btn-gin-save').classList.add('blue-mode');
-  document.getElementById('btn-gin-cancel').style.display='';
-  document.getElementById('gin-form-card').scrollIntoView({behavior:'smooth',block:'start'});
-}
-function cancelEditGin() {
-  editingGinId=null;
-  document.getElementById('gin-name-input').value  ='';
-  document.getElementById('gin-date-input').value  =today();
-  document.getElementById('gin-maxpts-input').value='';
-  document.getElementById('gin-obs-input').value   ='';
-  document.getElementById('gin-form-title').textContent='✨ Nova Gincana';
-  document.getElementById('gin-form-title').classList.remove('editing-mode');
-  document.getElementById('gin-form-card').classList.remove('editing');
-  document.getElementById('btn-gin-save').textContent='+ Criar Gincana';
-  document.getElementById('btn-gin-save').classList.remove('blue-mode');
-  document.getElementById('btn-gin-cancel').style.display='none';
-}
-async function saveGincana() {
-  const name       = document.getElementById('gin-name-input').value.trim();
-  const date       = document.getElementById('gin-date-input').value;
-  const maxPts     = document.getElementById('gin-maxpts-input').value;
-  const obs        = document.getElementById('gin-obs-input').value.trim();
-  const scoringType= document.getElementById('gin-scoring-type').value || 'points';
-  if(!name) return showToast('Digite o nome da gincana!','error');
-
-  const payload = {
-    name,
-    data_gin:     date||null,
-    max_pts:      maxPts ? Number(maxPts) : null,
-    obs:          obs||null,
-    scoring_type: scoringType
-  };
-
-  if(editingGinId) {
-    const {error}=await sb.from('gincanas').update(payload).eq('id',editingGinId);
-    if(error){console.error(error);return showToast('Erro: '+(error.message||'falha ao atualizar'),'error');}
-    showToast(`Gincana "${name}" atualizada! ✅`,'success');
-    cancelEditGin();
-  } else {
-    const {error}=await sb.from('gincanas').insert(payload);
-    if(error){console.error(error);return showToast('Erro: '+(error.message||'falha ao criar'),'error');}
-    showToast(`Gincana "${name}" criada! 🎯`,'success');
-    document.getElementById('gin-name-input').value='';
-    document.getElementById('gin-maxpts-input').value='';
-    document.getElementById('gin-obs-input').value='';
-    // Reset scoring type toggle
-    document.getElementById('gin-scoring-type').value='points';
-    document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));
-    document.getElementById('gin-type-points').classList.add('active');
-  }
-}
-function confirmDeleteGin(id) {
-  const g=gincanas.find(x=>x.id===id); if(!g) return;
-  const n=entries.filter(e=>e.gin_id===id).length;
-  document.getElementById('confirm-title').textContent='Excluir Gincana';
-  document.getElementById('confirm-message').innerHTML=
-    `Excluir a gincana <strong>${escHtml(g.name)}</strong>?`+
-    (n>0?`<br><br>⚠️ Vinculada a <strong>${n} lançamentos</strong>. Eles <strong>não serão apagados</strong>.`:'');
-  confirmCallback=()=>deleteGincana(id);
-  openModal('modal-confirm');
-}
-async function deleteGincana(id) {
-  const {error}=await sb.from('gincanas').delete().eq('id',id);
-  if(error){console.error(error);return showToast('Erro: '+(error.message||'falha ao excluir'),'error');}
-  if(editingGinId===id) cancelEditGin();
-  showToast('Gincana excluída.','info');
-}
-function viewGinDetail(id) {
-  const g=gincanas.find(x=>x.id===id); if(!g) return;
-  document.getElementById('gin-detail-title').textContent=`🎯 ${g.name}`;
-  document.getElementById('gin-detail-body').innerHTML=`
-    <div class="gin-detail-meta">
-      ${g.data_gin?`<span class="gin-detail-chip">📅 ${fmtDate(g.data_gin)}</span>`:''}
-      ${g.max_pts ?`<span class="gin-detail-chip">🏅 ${g.max_pts} pts máx.</span>`:''}
-    </div>
-    ${g.obs
-      ?`<div class="gin-detail-obs-label">📝 Dinâmica / Observações</div>
-        <div class="gin-detail-obs">${escHtml(g.obs)}</div>`
-      :`<div style="color:var(--muted);font-size:.88rem">Sem observações registradas.</div>`}`;
-  openModal('modal-gin-detail');
-}
-
-// ════════════════════════════════════════════════════
-//   CALCULADORA DE PROVAS
-// ════════════════════════════════════════════════════
-
-// Estado da calculadora
-let calcSimResult = []; // [{teamId, name, color, value, pts, time}]
-
-function renderCalcTab() {
-  // Popula select de gincanas
-  const sel = document.getElementById('calc-gin-select');
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">— escolha a gincana —</option>' +
-    gincanas.map(g => {
-      const icon = g.scoring_type==='time' ? '⏱' : '🏅';
-      return `<option value="${g.id}">${icon} ${escHtml(g.name)}${g.data_gin?' — '+fmtDate(g.data_gin):''}</option>`;
-    }).join('');
-  if (cur && sel.querySelector(`option[value="${cur}"]`)) sel.value = cur;
-  // Re-render inputs if gin still selected
-  if (sel.value) onCalcGinChange(sel.value);
-}
-
-function onCalcGinChange(ginId) {
-  const g = ginById(ginId);
-  const badge    = document.getElementById('calc-type-badge');
-  const area     = document.getElementById('calc-teams-area');
-  const actions  = document.getElementById('calc-actions');
-  const resultEl = document.getElementById('calc-result');
-
-  // Reset result
-  calcSimResult = [];
-  resultEl.classList.add('hidden');
-
-  if (!g) {
-    badge.classList.add('hidden');
-    area.innerHTML = '';
-    actions.style.display = 'none';
-    return;
-  }
-
-  const isTime = g.scoring_type === 'time';
-
-  // Badge do tipo
-  badge.className = `calc-type-badge${isTime?' time-mode':''}`;
-  badge.classList.remove('hidden');
-  badge.textContent = isTime
-    ? '⏱ Modo TEMPO — vence quem for mais rápido'
-    : '🏅 Modo PONTOS — vence quem somar mais';
-
-  // Gera um input por equipe
-  area.innerHTML = teams.length
-    ? `<div class="calc-teams-area">${teams.map(t => `
-        <div class="calc-team-row">
-          <span class="calc-team-dot" style="background:${t.color}"></span>
-          <span class="calc-team-name">${escHtml(t.name)}</span>
-          ${isTime ? `
-            <div class="calc-time-wrap" data-team="${t.id}">
-              <input class="calc-time-inp" data-team="${t.id}" data-part="min"
-                     type="text" inputmode="numeric" placeholder="00" maxlength="2" />
-              <span class="calc-time-dot">:</span>
-              <input class="calc-time-inp" data-team="${t.id}" data-part="sec"
-                     type="text" inputmode="numeric" placeholder="00" maxlength="2" />
-              <span class="calc-time-dot">:</span>
-              <input class="calc-time-inp" data-team="${t.id}" data-part="ms"
-                     type="text" inputmode="numeric" placeholder="00" maxlength="2" />
-            </div>` : `
-            <input class="calc-pts-input" data-team="${t.id}"
-                   type="number" placeholder="Pts" min="0" />`}
-        </div>`).join('')}</div>`
-    : `<div class="empty-state"><span class="empty-icon">👥</span>Cadastre equipes primeiro.</div>`;
-
-  // Máscara numérica nos campos de tempo
-  if (isTime) {
-    area.querySelectorAll('.calc-time-inp').forEach(inp => {
-      inp.addEventListener('input', () => {
-        inp.value = inp.value.replace(/\D/,'').slice(0,2);
-      });
-    });
-  }
-
-  actions.style.display = teams.length ? '' : 'none';
-}
-
-// Converte "MM:SS:ms" em milissegundos totais para comparação
-function timeToMs(str) {
-  if (!str) return Infinity;
-  const [mm,ss,ms] = str.split(':').map(Number);
-  return ((mm||0)*60*1000) + ((ss||0)*1000) + (ms||0)*10;
-}
-
-function simulateCalc() {
-  const ginId = document.getElementById('calc-gin-select').value;
-  const g = ginById(ginId);
-  if (!g) return showToast('Selecione uma gincana!','error');
-
-  const isTime = g.scoring_type === 'time';
-  const maxPts = g.max_pts || 100;
-
-  // Lê os valores de cada equipe
-  const rows = teams.map(t => {
-    if (isTime) {
-      const min = document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="min"]`)?.value||'';
-      const sec = document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="sec"]`)?.value||'';
-      const ms  = document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="ms"]` )?.value||'';
-      const timeStr = (min||sec||ms)
-        ? `${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`
-        : null;
-      return { teamId:t.id, name:t.name, color:t.color, time:timeStr, value: timeToMs(timeStr) };
-    } else {
-      const val = Number(document.querySelector(`.calc-pts-input[data-team="${t.id}"]`)?.value||0);
-      return { teamId:t.id, name:t.name, color:t.color, value:val, time:null };
-    }
-  });
-
-  // Filtra equipes sem valor preenchido
-  const filled = rows.filter(r => isTime ? r.time !== null : r.value > 0);
-  if (!filled.length) return showToast(
-    isTime ? 'Preencha o tempo de pelo menos uma equipe!' : 'Preencha a pontuação de pelo menos uma equipe!',
-    'error'
-  );
-
-  // Ordena: tempo → menor primeiro; pontos → maior primeiro
-  filled.sort((a,b) => isTime ? a.value-b.value : b.value-a.value);
-
-  // Distribui pontos por posição
-  const pontosPorPosicao = [100, 80, 60, 40, 30, 20, 10];
-  calcSimResult = filled.map((r, i) => ({
-    ...r,
-    pts: isTime ? (pontosPorPosicao[i] ?? 5) : r.value,
-    pos: i+1
-  }));
-
-  renderCalcResult(isTime);
-  document.getElementById('calc-result').classList.remove('hidden');
-  document.getElementById('calc-result').scrollIntoView({behavior:'smooth', block:'start'});
-}
-
-function renderCalcResult(isTime) {
-  const posClass = i => ['gold','silver','bronze'][i]||'normal';
+  const filtered = start ? entries.filter(e=>(e.data_entry||'')>=start&&(e.data_entry||'')<=end) : entries;
+  const ranking  = calcRanking(filtered);
+  const posClass = i=>['gold','silver','bronze'][i]||'normal';
   const medals   = ['🥇','🥈','🥉'];
-  document.getElementById('calc-result-list').innerHTML = calcSimResult.map((r,i) => `
-    <div class="calc-result-item ${i<3?'rank-'+(i+1):''}">
-      <span class="calc-res-pos ${posClass(i)}">${medals[i]||r.pos+'º'}</span>
-      <span class="calc-res-dot" style="background:${r.color}"></span>
-      <div class="calc-res-info">
-        <div class="calc-res-name">${escHtml(r.name)}</div>
-        ${r.time ? `<div class="calc-res-time">⏱ ${r.time}</div>` : ''}
-        ${!isTime ? `<div class="calc-res-time">Pontuação bruta: ${r.value}</div>` : ''}
-      </div>
-      <div class="calc-res-pts">+${r.pts}</div>
+
+  document.getElementById('report-period-label').textContent = label;
+  document.getElementById('report-date-gen').textContent = new Date().toLocaleString('pt-BR');
+  document.getElementById('report-ranking-list').innerHTML = ranking.map((t,i)=>`
+    <div class="report-rank-item ${i<3?'rr-'+(i+1):''}">
+      <span class="rr-pos ${posClass(i)}">${medals[i]||i+1+'º'}</span>
+      <span class="rr-dot" style="background:${t.color}"></span>
+      <span class="rr-name">${escHtml(t.name)}</span>
+      <span class="rr-pts ${t.pts<0?'negative':''}">${t.pts>0?'+':''}${t.pts}</span>
     </div>`).join('');
 }
 
-async function oficializarCalc() {
-  const ginId = document.getElementById('calc-gin-select').value;
-  const g = ginById(ginId);
-  if (!g || !calcSimResult.length) return showToast('Nada para oficializar!','error');
-
-  const dateStr = today();
-  const btn = document.getElementById('btn-calc-oficializar');
-  btn.disabled = true;
-  btn.textContent = '⏳ Salvando...';
-
-  let erros = 0;
-  for (const r of calcSimResult) {
-    const payload = {
-      team_id:         r.teamId,
-      gin_id:          ginId,
-      points:          r.pts,
-      descricao:       `Calculadora — ${g.name} — ${r.pos}º lugar`,
-      data_entry:      dateStr,
-      tipo:            'bonus',
-      completion_time: r.time || null
-    };
-    const { error } = await sb.from('entries').insert(payload);
-    if (error) { console.error(error); erros++; }
-  }
-
-  btn.disabled = false;
-  btn.textContent = '✅ Oficializar Resultados';
-
-  if (erros > 0) {
-    showToast(`${erros} erro(s) ao salvar. Verifique o console.`, 'error');
-  } else {
-    showToast(`${calcSimResult.length} lançamentos oficializados! 🎉`, 'success');
-    // Limpa calculadora
-    calcSimResult = [];
-    document.getElementById('calc-result').classList.add('hidden');
-    document.getElementById('calc-gin-select').value = '';
-    document.getElementById('calc-type-badge').classList.add('hidden');
-    document.getElementById('calc-teams-area').innerHTML = '';
-    document.getElementById('calc-actions').style.display = 'none';
-  }
+async function exportImage() {
+  const card = document.getElementById('report-card');
+  showToast('Gerando imagem...', 'info');
+  try {
+    const canvas = await html2canvas(card, {
+      backgroundColor: '#1a0533', scale: 2,
+      useCORS: true, allowTaint: true
+    });
+    const link = document.createElement('a');
+    link.download = `ranking-ejc-${today()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    showToast('Imagem salva! 📸', 'success');
+  } catch(e) { showToast('Erro ao gerar imagem.', 'error'); console.error(e); }
 }
 
-// ─── SELECTS ────────────────────────────────────────
-function populateSelects() {
-  const teamOpts = teams.length
-    ? teams.map(t=>`<option value="${t.id}">${escHtml(t.name)}</option>`).join('')
-    : '<option value="" disabled>Nenhuma equipe cadastrada</option>';
-  const ginOpts = gincanas.map(g=>`<option value="${g.id}">${escHtml(g.name)}</option>`).join('');
-
-  function rebuild(id, prefix, extra) {
-    const sel=document.getElementById(id), cur=sel.value;
-    sel.innerHTML=prefix+extra;
-    if(cur&&sel.querySelector(`option[value="${cur}"]`)) sel.value=cur;
-  }
-  rebuild('score-team','<option value="">— selecione a equipe —</option>',teamOpts);
-  rebuild('pun-team',  '<option value="">— selecione a equipe —</option>',teamOpts);
-  rebuild('score-gin', '<option value="">— nenhuma —</option>',ginOpts);
+async function exportPDF() {
+  const card = document.getElementById('report-card');
+  showToast('Gerando PDF...', 'info');
+  try {
+    const canvas = await html2canvas(card, { backgroundColor: '#1a0533', scale: 2, useCORS: true });
+    const { jsPDF } = window.jspdf;
+    const pdf  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const imgW = 190, imgH = (canvas.height * imgW) / canvas.width;
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 10, imgW, imgH);
+    pdf.save(`ranking-ejc-${today()}.pdf`);
+    showToast('PDF salvo! 📄', 'success');
+  } catch(e) { showToast('Erro ao gerar PDF.', 'error'); console.error(e); }
 }
 
-// ─── ENTRY SAVE ─────────────────────────────────────
-async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}) {
-  const payload={
-    team_id:    teamId,
-    gin_id:     ginId||null,
-    points:     Number(points),
-    descricao:  desc||'',
-    data_entry: date,
-    tipo:       type,
-    completion_time: completionTime||null
-  };
-  const {error}=await sb.from('entries').insert(payload);
-  if(error){console.error(error);showToast('Erro: '+(error.message||'falha ao salvar'),'error');}
+// ─── EQUIPES CRUD ────────────────────────────────────
+function renderEquipesTab() {
+  const list=document.getElementById('teams-list'), count=document.getElementById('teams-count');
+  count.textContent=teams.length||'';
+  if(!teams.length){list.innerHTML=`<div class="empty-state"><span class="empty-icon">👥</span>Nenhuma equipe.</div>`;return;}
+  const totals={};
+  entries.forEach(e=>{totals[e.team_id]=(totals[e.team_id]||0)+Number(e.points);});
+  list.innerHTML=teams.map(t=>{const pts=totals[t.id]||0;return`<div class="team-entity-item"><span class="team-dot" style="background:${t.color}"></span><div class="team-entity-info"><div class="team-entity-name">${escHtml(t.name)}</div><div class="team-entity-sub">Saldo acumulado</div></div><div class="team-entity-pts ${pts<0?'negative':''}">${pts>=0?'+':''}${pts}</div><div class="entity-actions"><button class="btn-edit" data-edit-team="${t.id}">✏️</button><button class="btn-delete" data-del-team="${t.id}">🗑</button></div></div>`;}).join('');
+  list.querySelectorAll('[data-edit-team]').forEach(btn=>btn.addEventListener('click',()=>startEditTeam(btn.dataset.editTeam)));
+  list.querySelectorAll('[data-del-team]').forEach(btn=>btn.addEventListener('click',()=>confirmDeleteTeam(btn.dataset.delTeam)));
 }
+function startEditTeam(id){const t=teams.find(x=>x.id===id);if(!t)return;editingTeamId=id;document.getElementById('team-name-input').value=t.name;document.getElementById('team-color-input').value=t.color;document.getElementById('team-form-title').textContent='✏️ Editar Equipe';document.getElementById('team-form-title').classList.add('editing-mode');document.getElementById('team-form-card').classList.add('editing');document.getElementById('btn-team-save').textContent='Salvar Alterações';document.getElementById('btn-team-save').classList.add('blue-mode');document.getElementById('btn-team-cancel').style.display='';document.getElementById('team-form-card').scrollIntoView({behavior:'smooth',block:'start'});}
+function cancelEditTeam(){editingTeamId=null;document.getElementById('team-name-input').value='';document.getElementById('team-color-input').value='#f59e0b';document.getElementById('team-form-title').textContent='✨ Nova Equipe';document.getElementById('team-form-title').classList.remove('editing-mode');document.getElementById('team-form-card').classList.remove('editing');document.getElementById('btn-team-save').textContent='+ Adicionar Equipe';document.getElementById('btn-team-save').classList.remove('blue-mode');document.getElementById('btn-team-cancel').style.display='none';}
+async function saveTeam(){const name=document.getElementById('team-name-input').value.trim(),color=document.getElementById('team-color-input').value;if(!name)return showToast('Digite o nome!','error');const dup=teams.find(t=>t.name.toLowerCase()===name.toLowerCase()&&t.id!==editingTeamId);if(dup)return showToast('Nome já existe!','error');if(editingTeamId){const{error}=await sb.from('teams').update({name,color}).eq('id',editingTeamId);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`"${name}" atualizada! ✅`,'success');cancelEditTeam();}else{const{error}=await sb.from('teams').insert({name,color});if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`Equipe "${name}" criada! 🙌`,'success');document.getElementById('team-name-input').value='';}}
+function confirmDeleteTeam(id){const t=teams.find(x=>x.id===id);if(!t)return;const n=entries.filter(e=>e.team_id===id).length;document.getElementById('confirm-title').textContent='Excluir Equipe';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(t.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteTeam(id);openModal('modal-confirm');}
+async function deleteTeam(id){const{error}=await sb.from('teams').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}if(editingTeamId===id)cancelEditTeam();showToast('Equipe excluída.','info');}
 
-// ─── COMPLETION TIME HELPERS ─────────────────────────
-// Monta a string "MM:SS:ms" a partir dos três campos
-function buildCompletionTime(minEl, secEl, msEl) {
-  const min = document.getElementById(minEl).value.trim();
-  const sec = document.getElementById(secEl).value.trim();
-  const ms  = document.getElementById(msEl).value.trim();
-  if (!min && !sec && !ms) return null; // campo vazio → opcional
-  const mm = (min||'00').padStart(2,'0');
-  const ss = (sec||'00').padStart(2,'0');
-  const cs = (ms||'00').padStart(2,'0');
-  return `${mm}:${ss}:${cs}`;
-}
+// ─── GINCANAS CRUD ───────────────────────────────────
+function renderGincanasTab(){const list=document.getElementById('gincanas-list'),count=document.getElementById('gincanas-count');count.textContent=gincanas.length||'';if(!gincanas.length){list.innerHTML=`<div class="empty-state"><span class="empty-icon">🎯</span>Nenhuma gincana.</div>`;return;}list.innerHTML=gincanas.map(g=>{const hasObs=g.obs&&g.obs.trim().length>0;return`<div class="gin-entity-item"><div class="gin-entity-header"><span class="gin-entity-name">🎯 ${escHtml(g.name)}</span><div class="entity-actions"><button class="btn-edit" data-edit-gin="${g.id}">✏️</button><button class="btn-delete" data-del-gin="${g.id}">🗑</button></div></div><div class="gin-entity-meta">${g.data_gin?`<span class="gin-entity-date">📅 ${fmtDate(g.data_gin)}</span>`:''}${g.max_pts?`<span class="gin-entity-maxpts">${g.max_pts} pts máx.</span>`:''}${g.scoring_type?`<span class="gin-entity-maxpts">${g.scoring_type==='time'?'⏱ TEMPO':'🏅 PONTOS'}</span>`:''}</div>${hasObs?`<div class="gin-entity-obs-preview">${escHtml(g.obs)}</div><button class="gin-see-more" data-view-gin="${g.id}">Ver dinâmica →</button>`:''}</div>`;}).join('');list.querySelectorAll('[data-edit-gin]').forEach(btn=>btn.addEventListener('click',()=>startEditGin(btn.dataset.editGin)));list.querySelectorAll('[data-del-gin]').forEach(btn=>btn.addEventListener('click',()=>confirmDeleteGin(btn.dataset.delGin)));list.querySelectorAll('[data-view-gin]').forEach(btn=>btn.addEventListener('click',()=>viewGinDetail(btn.dataset.viewGin)));}
+function startEditGin(id){const g=gincanas.find(x=>x.id===id);if(!g)return;editingGinId=id;document.getElementById('gin-name-input').value=g.name;document.getElementById('gin-date-input').value=g.data_gin||'';document.getElementById('gin-maxpts-input').value=g.max_pts||'';document.getElementById('gin-obs-input').value=g.obs||'';const st=g.scoring_type||'points';document.getElementById('gin-scoring-type').value=st;document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));document.getElementById(st==='time'?'gin-type-time':'gin-type-points').classList.add('active');document.getElementById('gin-form-title').textContent='✏️ Editar Gincana';document.getElementById('gin-form-title').classList.add('editing-mode');document.getElementById('gin-form-card').classList.add('editing');document.getElementById('btn-gin-save').textContent='Salvar Alterações';document.getElementById('btn-gin-save').classList.add('blue-mode');document.getElementById('btn-gin-cancel').style.display='';document.getElementById('gin-form-card').scrollIntoView({behavior:'smooth',block:'start'});}
+function cancelEditGin(){editingGinId=null;document.getElementById('gin-name-input').value='';document.getElementById('gin-date-input').value=today();document.getElementById('gin-maxpts-input').value='';document.getElementById('gin-obs-input').value='';document.getElementById('gin-scoring-type').value='points';document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));document.getElementById('gin-type-points').classList.add('active');document.getElementById('gin-form-title').textContent='✨ Nova Gincana';document.getElementById('gin-form-title').classList.remove('editing-mode');document.getElementById('gin-form-card').classList.remove('editing');document.getElementById('btn-gin-save').textContent='+ Criar Gincana';document.getElementById('btn-gin-save').classList.remove('blue-mode');document.getElementById('btn-gin-cancel').style.display='none';}
+async function saveGincana(){const name=document.getElementById('gin-name-input').value.trim(),date=document.getElementById('gin-date-input').value,maxPts=document.getElementById('gin-maxpts-input').value,obs=document.getElementById('gin-obs-input').value.trim(),scoringType=document.getElementById('gin-scoring-type').value||'points';if(!name)return showToast('Digite o nome!','error');const payload={name,data_gin:date||null,max_pts:maxPts?Number(maxPts):null,obs:obs||null,scoring_type:scoringType};if(editingGinId){const{error}=await sb.from('gincanas').update(payload).eq('id',editingGinId);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`"${name}" atualizada! ✅`,'success');cancelEditGin();}else{const{error}=await sb.from('gincanas').insert(payload);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`Gincana "${name}" criada! 🎯`,'success');document.getElementById('gin-name-input').value='';document.getElementById('gin-maxpts-input').value='';document.getElementById('gin-obs-input').value='';}}
+function confirmDeleteGin(id){const g=gincanas.find(x=>x.id===id);if(!g)return;const n=entries.filter(e=>e.gin_id===id).length;document.getElementById('confirm-title').textContent='Excluir Gincana';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(g.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteGincana(id);openModal('modal-confirm');}
+async function deleteGincana(id){const{error}=await sb.from('gincanas').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}if(editingGinId===id)cancelEditGin();showToast('Gincana excluída.','info');}
+function viewGinDetail(id){const g=gincanas.find(x=>x.id===id);if(!g)return;document.getElementById('gin-detail-title').textContent=`🎯 ${g.name}`;document.getElementById('gin-detail-body').innerHTML=`<div class="gin-detail-meta">${g.data_gin?`<span class="gin-detail-chip">📅 ${fmtDate(g.data_gin)}</span>`:''}${g.max_pts?`<span class="gin-detail-chip">🏅 ${g.max_pts} pts</span>`:''}${g.scoring_type?`<span class="gin-detail-chip">${g.scoring_type==='time'?'⏱ TEMPO':'🏅 PONTOS'}</span>`:''}</div>${g.obs?`<div class="gin-detail-obs-label">📝 Dinâmica</div><div class="gin-detail-obs">${escHtml(g.obs)}</div>`:'<p style="color:var(--muted)">Sem observações.</p>'}`;openModal('modal-gin-detail');}
 
-// Limpa os três campos de tempo
-function clearTimeInputs(...ids) {
-  ids.forEach(id => { document.getElementById(id).value = ''; });
-}
+// ─── CALCULADORA ─────────────────────────────────────
+function renderCalcTab(){const sel=document.getElementById('calc-gin-select'),cur=sel.value;sel.innerHTML='<option value="">— escolha a gincana —</option>'+gincanas.map(g=>{const icon=g.scoring_type==='time'?'⏱':'🏅';return`<option value="${g.id}">${icon} ${escHtml(g.name)}${g.data_gin?' — '+fmtDate(g.data_gin):''}</option>`;}).join('');if(cur&&sel.querySelector(`option[value="${cur}"]`)){sel.value=cur;onCalcGinChange(cur);}}
+function onCalcGinChange(ginId){const g=ginById(ginId),badge=document.getElementById('calc-type-badge'),area=document.getElementById('calc-teams-area'),actions=document.getElementById('calc-actions'),resultEl=document.getElementById('calc-result');calcSimResult=[];resultEl.classList.add('hidden');if(!g){badge.classList.add('hidden');area.innerHTML='';actions.style.display='none';return;}const isTime=g.scoring_type==='time';badge.className=`calc-type-badge${isTime?' time-mode':''}`;badge.classList.remove('hidden');badge.textContent=isTime?'⏱ Modo TEMPO — vence quem for mais rápido':'🏅 Modo PONTOS — vence quem somar mais';area.innerHTML=teams.length?`<div class="calc-teams-area">${teams.map(t=>`<div class="calc-team-row"><span class="calc-team-dot" style="background:${t.color}"></span><span class="calc-team-name">${escHtml(t.name)}</span>${isTime?`<div class="calc-time-wrap" data-team="${t.id}"><input class="calc-time-inp" data-team="${t.id}" data-part="min" type="text" inputmode="numeric" placeholder="00" maxlength="2"/><span class="calc-time-dot">:</span><input class="calc-time-inp" data-team="${t.id}" data-part="sec" type="text" inputmode="numeric" placeholder="00" maxlength="2"/><span class="calc-time-dot">:</span><input class="calc-time-inp" data-team="${t.id}" data-part="ms" type="text" inputmode="numeric" placeholder="00" maxlength="2"/></div>`:`<input class="calc-pts-input" data-team="${t.id}" type="number" placeholder="Pts" min="0"/>`}</div>`).join('')}</div>`:`<div class="empty-state">Cadastre equipes primeiro.</div>`;if(isTime)area.querySelectorAll('.calc-time-inp').forEach(inp=>{inp.addEventListener('input',()=>{inp.value=inp.value.replace(/\D/,'').slice(0,2);});});actions.style.display=teams.length?'':'none';}
+function timeToMs(str){if(!str)return Infinity;const[mm,ss,ms]=str.split(':').map(Number);return((mm||0)*60*1000)+((ss||0)*1000)+(ms||0)*10;}
+function simulateCalc(){const ginId=document.getElementById('calc-gin-select').value,g=ginById(ginId);if(!g)return showToast('Selecione uma gincana!','error');const isTime=g.scoring_type==='time';const rows=teams.map(t=>{if(isTime){const min=document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="min"]`)?.value||'',sec=document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="sec"]`)?.value||'',ms=document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="ms"]`)?.value||'';const timeStr=(min||sec||ms)?`${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`:null;return{teamId:t.id,name:t.name,color:t.color,time:timeStr,value:timeToMs(timeStr)};}else{const val=Number(document.querySelector(`.calc-pts-input[data-team="${t.id}"]`)?.value||0);return{teamId:t.id,name:t.name,color:t.color,value:val,time:null};}});const filled=rows.filter(r=>isTime?r.time!==null:r.value>0);if(!filled.length)return showToast(isTime?'Preencha o tempo de pelo menos uma equipe!':'Preencha a pontuação de pelo menos uma equipe!','error');filled.sort((a,b)=>isTime?a.value-b.value:b.value-a.value);const pts=[100,80,60,40,30,20,10];calcSimResult=filled.map((r,i)=>({...r,pts:isTime?(pts[i]??5):r.value,pos:i+1}));renderCalcResult(isTime);document.getElementById('calc-result').classList.remove('hidden');document.getElementById('calc-result').scrollIntoView({behavior:'smooth',block:'start'});}
+function renderCalcResult(isTime){const posClass=i=>['gold','silver','bronze'][i]||'normal',medals=['🥇','🥈','🥉'];document.getElementById('calc-result-list').innerHTML=calcSimResult.map((r,i)=>`<div class="calc-result-item ${i<3?'rank-'+(i+1):''}"><span class="calc-res-pos ${posClass(i)}">${medals[i]||r.pos+'º'}</span><span class="calc-res-dot" style="background:${r.color}"></span><div class="calc-res-info"><div class="calc-res-name">${escHtml(r.name)}</div>${r.time?`<div class="calc-res-time">⏱ ${r.time}</div>`:''}${!isTime?`<div class="calc-res-time">Bruto: ${r.value}</div>`:''}</div><div class="calc-res-pts">+${r.pts}</div></div>`).join('');}
+async function oficializarCalc(){const ginId=document.getElementById('calc-gin-select').value,g=ginById(ginId);if(!g||!calcSimResult.length)return showToast('Nada para oficializar!','error');const btn=document.getElementById('btn-calc-oficializar');btn.disabled=true;btn.textContent='⏳ Salvando...';let erros=0;for(const r of calcSimResult){const{error}=await sb.from('entries').insert({team_id:r.teamId,gin_id:ginId,points:r.pts,descricao:`Calculadora — ${g.name} — ${r.pos}º lugar`,data_entry:today(),tipo:'bonus',completion_time:r.time||null});if(error){console.error(error);erros++;}}btn.disabled=false;btn.textContent='✅ Oficializar Resultados';if(erros>0){showToast(`${erros} erro(s) ao salvar.`,'error');}else{showToast(`${calcSimResult.length} lançamentos oficializados! 🎉`,'success');calcSimResult=[];document.getElementById('calc-result').classList.add('hidden');document.getElementById('calc-gin-select').value='';document.getElementById('calc-type-badge').classList.add('hidden');document.getElementById('calc-teams-area').innerHTML='';document.getElementById('calc-actions').style.display='none';}}
 
-// Aplica máscara numérica nos campos de tempo (só números, max 2 dígitos)
-function applyTimeMask(el, maxVal) {
-  el.addEventListener('input', () => {
-    el.value = el.value.replace(/\D/g,'').slice(0,2);
-    if (maxVal && Number(el.value) > maxVal) el.value = String(maxVal).padStart(2,'0');
-  });
-  // Avança para o próximo campo ao digitar 2 dígitos
-  el.addEventListener('keyup', () => {
-    if (el.value.length === 2 && el.nextElementSibling) {
-      const next = el.parentElement.querySelector(`[tabindex="${Number(el.tabIndex)+1}"]`);
-      if (next) next.focus();
-    }
-  });
-}
+// ─── ENTRY EDIT/DELETE ───────────────────────────────
+function openEditEntry(id){const e=entries.find(x=>x.id===id);if(!e)return;const teamOpts=teams.map(t=>`<option value="${t.id}" ${t.id===e.team_id?'selected':''}>${escHtml(t.name)}</option>`).join('');const ginOpts=gincanas.map(g=>`<option value="${g.id}" ${g.id===e.gin_id?'selected':''}>${escHtml(g.name)}</option>`).join('');document.getElementById('edit-entry-id').value=e.id;document.getElementById('edit-entry-team').innerHTML='<option value="">— selecione —</option>'+teamOpts;document.getElementById('edit-entry-gin').innerHTML='<option value="">— nenhuma —</option>'+ginOpts;document.getElementById('edit-entry-pts').value=e.points;document.getElementById('edit-entry-desc').value=e.descricao||'';document.getElementById('edit-entry-date').value=e.data_entry;if(e.completion_time){const parts=e.completion_time.split(':');document.getElementById('edit-time-min').value=parts[0]||'';document.getElementById('edit-time-sec').value=parts[1]||'';document.getElementById('edit-time-ms').value=parts[2]||'';}else{document.getElementById('edit-time-min').value='';document.getElementById('edit-time-sec').value='';document.getElementById('edit-time-ms').value='';}const box=document.getElementById('modal-edit-entry').querySelector('.modal-box');if(e.tipo==='punishment'){box.classList.add('punishment-box');document.getElementById('edit-entry-modal-title').textContent='⚠️ Editar Punição';}else{box.classList.remove('punishment-box');document.getElementById('edit-entry-modal-title').textContent='✏️ Editar Lançamento';}openModal('modal-edit-entry');}
+async function saveEditEntry(){const id=document.getElementById('edit-entry-id').value,team_id=document.getElementById('edit-entry-team').value,gin_id=document.getElementById('edit-entry-gin').value,points=Number(document.getElementById('edit-entry-pts').value),descricao=document.getElementById('edit-entry-desc').value.trim(),data_entry=document.getElementById('edit-entry-date').value;const min=document.getElementById('edit-time-min').value,sec=document.getElementById('edit-time-sec').value,ms=document.getElementById('edit-time-ms').value;const completionTime=(min||sec||ms)?`${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`:null;if(!team_id)return showToast('Selecione uma equipe!','error');if(!points||isNaN(points))return showToast('Informe a pontuação!','error');if(!data_entry)return showToast('Informe a data!','error');const entry=entries.find(x=>x.id===id);const tipo=entry?.tipo||(points<0?'punishment':'bonus');const{error}=await sb.from('entries').update({team_id,gin_id:gin_id||null,points,descricao,data_entry,tipo,completion_time:completionTime||null}).eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}closeModal('modal-edit-entry');showToast('Lançamento atualizado! ✅','success');}
+function confirmDeleteEntry(id){const e=entries.find(x=>x.id===id);if(!e)return;const team=teamById(e.team_id);document.getElementById('confirm-title').textContent='Excluir Lançamento';document.getElementById('confirm-message').innerHTML=`Excluir lançamento de <strong>${e.points>0?'+':''}${e.points} pts</strong> para <strong>${escHtml(team?.name||'?')}</strong> em <strong>${fmtDate(e.data_entry)}</strong>?<br><br>⚠️ Ação <strong>não pode ser desfeita</strong>.`;confirmCallback=()=>deleteEntry(id);openModal('modal-confirm');}
+async function deleteEntry(id){const{error}=await sb.from('entries').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast('Lançamento excluído.','info');}
 
-// ─── MODAL HELPERS ──────────────────────────────────
-function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
-function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+// ─── ENTRY SAVE ──────────────────────────────────────
+async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}){const payload={team_id:teamId,gin_id:ginId||null,points:Number(points),descricao:desc||'',data_entry:date,tipo:type,completion_time:completionTime||null};const{error}=await sb.from('entries').insert(payload);if(error){console.error(error);showToast('Erro: '+error.message,'error');}}
 
-// ─── EVENTS ─────────────────────────────────────────
+// ─── SELECTS ─────────────────────────────────────────
+function populateSelects(){const teamOpts=teams.length?teams.map(t=>`<option value="${t.id}">${escHtml(t.name)}</option>`).join(''):'<option disabled>Nenhuma equipe</option>';const ginOpts=gincanas.map(g=>`<option value="${g.id}">${escHtml(g.name)}</option>`).join('');function rebuild(id,prefix,extra){const sel=document.getElementById(id),cur=sel.value;sel.innerHTML=prefix+extra;if(cur&&sel.querySelector(`option[value="${cur}"]`))sel.value=cur;}rebuild('score-team','<option value="">— selecione a equipe —</option>',teamOpts);rebuild('pun-team','<option value="">— selecione a equipe —</option>',teamOpts);rebuild('score-gin','<option value="">— nenhuma —</option>',ginOpts);}
+
+// ─── TIME HELPERS ────────────────────────────────────
+function buildCompletionTime(minId,secId,msId){const min=document.getElementById(minId).value.trim(),sec=document.getElementById(secId).value.trim(),ms=document.getElementById(msId).value.trim();if(!min&&!sec&&!ms)return null;return`${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`;}
+function applyTimeMask(el,maxVal){el.addEventListener('input',()=>{el.value=el.value.replace(/\D/g,'').slice(0,2);if(maxVal&&Number(el.value)>maxVal)el.value=String(maxVal).padStart(2,'0');});}
+
+// ─── MODAL HELPERS ───────────────────────────────────
+function openModal(id){document.getElementById(id).classList.remove('hidden');}
+function closeModal(id){document.getElementById(id).classList.add('hidden');}
+
+// ─── SHOW DIAGNOSTIC ─────────────────────────────────
+function showDiagnostic(title,msg){const app=document.getElementById('app');app.classList.remove('hidden');const icon=title.split(' ')[0];const rest=title.replace(/^\S+\s/,'');app.innerHTML=`<div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:1.5rem"><div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.75rem;max-width:480px;width:100%;text-align:center"><div style="font-size:2.5rem;margin-bottom:.75rem">${icon}</div><div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;color:var(--gold);letter-spacing:.06em;margin-bottom:1rem">${rest}</div><p style="color:var(--muted);font-size:.88rem;line-height:1.7;text-align:left">${msg}</p><button onclick="location.reload()" style="margin-top:1.25rem;background:linear-gradient(135deg,var(--gold),var(--gold2));color:var(--bg);border:none;border-radius:var(--radius-sm);padding:.8rem 2rem;font-family:'Nunito',sans-serif;font-weight:900;font-size:.95rem;cursor:pointer;width:100%">🔄 Tentar Novamente</button></div></div>`;}
+
+// ─── TOAST ───────────────────────────────────────────
+let toastTimer=null;
+function showToast(msg,type=''){const t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.className=`toast ${type}`;t.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.add('hidden'),3200);}
+
+// ─── EVENTS ──────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('gin-date-input').value = today();
 
-  // ── Máscaras dos campos de tempo ──
-  applyTimeMask(document.getElementById('score-time-min'), 99);
-  applyTimeMask(document.getElementById('score-time-sec'), 59);
-  applyTimeMask(document.getElementById('score-time-ms'),  99);
-  applyTimeMask(document.getElementById('edit-time-min'),  99);
-  applyTimeMask(document.getElementById('edit-time-sec'),  59);
-  applyTimeMask(document.getElementById('edit-time-ms'),   99);
+  // Máscaras de tempo
+  ['score-time-min','score-time-sec','score-time-ms','edit-time-min','edit-time-sec','edit-time-ms'].forEach((id,i) => {
+    const maxVals = [99,59,99,99,59,99];
+    applyTimeMask(document.getElementById(id), maxVals[i]);
+  });
 
-  // ── Tabs ──
+  // ── Auth tabs ──
+  document.querySelectorAll('.auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.auth-tab').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      const panel = tab.dataset.auth;
+      document.getElementById('auth-panel-login').classList.toggle('hidden', panel!=='login');
+      document.getElementById('auth-panel-register').classList.toggle('hidden', panel!=='register');
+      clearAuthErrors();
+    });
+  });
+
+  document.getElementById('btn-login').addEventListener('click', doLogin);
+  document.getElementById('login-password').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+  document.getElementById('btn-register').addEventListener('click', doRegister);
+  document.getElementById('btn-guest').addEventListener('click', doGuestAccess);
+  document.getElementById('btn-pending-guest').addEventListener('click', doGuestAccess);
+  document.getElementById('btn-pending-logout').addEventListener('click', doLogout);
+  document.getElementById('btn-logout').addEventListener('click', doLogout);
+
+  // ── App tabs ──
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -1108,23 +675,21 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('tab-'+name).classList.remove('hidden');
       toggleFilterBarVisibility(name);
       if(name==='charts') renderCharts();
+      if(name==='report') renderReport();
     });
   });
 
-  // ── FILTRO GLOBAL: modo ──
+  // ── Filtro global ──
   document.querySelectorAll('.gf-mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.gf-mode-btn').forEach(b=>b.classList.remove('active'));
       btn.classList.add('active');
       filterState.mode = btn.dataset.mode;
-      // Mostra painel correto
       document.querySelectorAll('.gf-panel').forEach(p=>p.classList.add('hidden'));
       document.getElementById('gf-panel-'+filterState.mode).classList.remove('hidden');
       renderAll();
     });
   });
-
-  // ── FILTRO GLOBAL: chips de período ──
   document.querySelectorAll('.gf-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       document.querySelectorAll('.gf-chip').forEach(c=>c.classList.remove('active'));
@@ -1133,43 +698,31 @@ document.addEventListener('DOMContentLoaded', () => {
       renderAll();
     });
   });
-
-  // ── FILTRO GLOBAL: competição ──
-  document.getElementById('gf-gin-select').addEventListener('change', e => {
-    filterState.ginId = e.target.value;
-    renderAll();
-  });
-
-  // ── FILTRO GLOBAL: personalizado ──
+  document.getElementById('gf-gin-select').addEventListener('change', e => { filterState.ginId=e.target.value; renderAll(); });
   document.getElementById('gf-custom-apply').addEventListener('click', () => {
     filterState.customFrom = document.getElementById('gf-date-from').value;
     filterState.customTo   = document.getElementById('gf-date-to').value;
-    if(!filterState.customFrom||!filterState.customTo)
-      return showToast('Defina as duas datas!','error');
-    if(filterState.customFrom>filterState.customTo)
-      return showToast('A data "De" deve ser anterior à "Até"!','error');
+    if(!filterState.customFrom||!filterState.customTo) return showToast('Defina as duas datas!','error');
+    if(filterState.customFrom>filterState.customTo) return showToast('Data inicial deve ser anterior!','error');
     renderAll();
   });
 
-  // ── Modal score ──
+  // ── Modais score / punição ──
   const openScoreModal = () => {
-    // Limpa TUDO antes de abrir — garante que não sobra nada da sessão anterior
-    document.getElementById('score-pts').value  = '';
-    document.getElementById('score-desc').value = '';
-    document.getElementById('score-date').value = today();
-    document.getElementById('score-team').value = '';
-    document.getElementById('score-gin').value  = '';
-    document.querySelectorAll('#modal-score .qpt').forEach(b => b.classList.remove('selected'));
-    // Limpa os três campos de tempo explicitamente
-    document.getElementById('score-time-min').value = '';
-    document.getElementById('score-time-sec').value = '';
-    document.getElementById('score-time-ms').value  = '';
+    document.getElementById('score-pts').value='';
+    document.getElementById('score-desc').value='';
+    document.getElementById('score-date').value=today();
+    document.getElementById('score-team').value='';
+    document.getElementById('score-gin').value='';
+    document.querySelectorAll('#modal-score .qpt').forEach(b=>b.classList.remove('selected'));
+    document.getElementById('score-time-min').value='';
+    document.getElementById('score-time-sec').value='';
+    document.getElementById('score-time-ms').value='';
     openModal('modal-score');
   };
   document.getElementById('btn-header-score').addEventListener('click', openScoreModal);
   document.getElementById('fab-score').addEventListener('click', openScoreModal);
 
-  // ── Modal punição ──
   const openPunModal = () => {
     document.getElementById('pun-pts').value='';
     document.getElementById('pun-desc').value='';
@@ -1178,140 +731,95 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('#modal-punishment .qpt').forEach(b=>b.classList.remove('selected'));
     openModal('modal-punishment');
   };
-  document.getElementById('btn-header-pun').addEventListener('click',openPunModal);
-  document.getElementById('fab-punishment').addEventListener('click',openPunModal);
+  document.getElementById('btn-header-pun').addEventListener('click', openPunModal);
+  document.getElementById('fab-punishment').addEventListener('click', openPunModal);
 
   // ── Fechar modais ──
-  document.querySelectorAll('[data-close]').forEach(btn =>
+  document.querySelectorAll('[data-close]').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.dataset.close;
       closeModal(id);
-      // Garante limpeza dos campos de tempo ao fechar score modal
-      if (id === 'modal-score') {
-        document.getElementById('score-time-min').value = '';
-        document.getElementById('score-time-sec').value = '';
-        document.getElementById('score-time-ms').value  = '';
+      if(id==='modal-score'){
+        document.getElementById('score-time-min').value='';
+        document.getElementById('score-time-sec').value='';
+        document.getElementById('score-time-ms').value='';
       }
-    })
-  );
-  document.querySelectorAll('.modal').forEach(m =>
+    });
+  });
+  document.querySelectorAll('.modal').forEach(m => {
     m.addEventListener('click', e => {
-      if (e.target === m) {
+      if(e.target===m){
         closeModal(m.id);
-        if (m.id === 'modal-score') {
-          document.getElementById('score-time-min').value = '';
-          document.getElementById('score-time-sec').value = '';
-          document.getElementById('score-time-ms').value  = '';
+        if(m.id==='modal-score'){
+          document.getElementById('score-time-min').value='';
+          document.getElementById('score-time-sec').value='';
+          document.getElementById('score-time-ms').value='';
         }
       }
-    })
-  );
-
-  // ── Confirm OK ──
-  document.getElementById('btn-confirm-ok').addEventListener('click',()=>{
-    closeModal('modal-confirm');
-    if(confirmCallback){ confirmCallback(); confirmCallback=null; }
+    });
   });
 
-  // ── Quick pts — score ──
-  document.querySelectorAll('#modal-score .qpt').forEach(btn=>btn.addEventListener('click',()=>{
-    document.querySelectorAll('#modal-score .qpt').forEach(b=>b.classList.remove('selected'));
-    btn.classList.add('selected');
-    document.getElementById('score-pts').value=btn.dataset.v;
-  }));
-  // ── Quick pts — punição ──
-  document.querySelectorAll('#modal-punishment .qpt').forEach(btn=>btn.addEventListener('click',()=>{
-    document.querySelectorAll('#modal-punishment .qpt').forEach(b=>b.classList.remove('selected'));
-    btn.classList.add('selected');
-    document.getElementById('pun-pts').value=btn.dataset.v;
-  }));
+  document.getElementById('btn-confirm-ok').addEventListener('click', () => { closeModal('modal-confirm'); if(confirmCallback){confirmCallback();confirmCallback=null;} });
+
+  // ── Quick pts ──
+  document.querySelectorAll('#modal-score .qpt').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('#modal-score .qpt').forEach(b=>b.classList.remove('selected'));btn.classList.add('selected');document.getElementById('score-pts').value=btn.dataset.v;}));
+  document.querySelectorAll('#modal-punishment .qpt').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('#modal-punishment .qpt').forEach(b=>b.classList.remove('selected'));btn.classList.add('selected');document.getElementById('pun-pts').value=btn.dataset.v;}));
 
   // ── Salvar pontos ──
   document.getElementById('btn-save-score').addEventListener('click', async()=>{
-    const teamId = document.getElementById('score-team').value;
-    const ginId  = document.getElementById('score-gin').value;
-    const pts    = Number(document.getElementById('score-pts').value);
-    const desc   = document.getElementById('score-desc').value.trim();
-    const date   = document.getElementById('score-date').value;
-    const completionTime = buildCompletionTime('score-time-min','score-time-sec','score-time-ms');
-
-    if(!teamId) return showToast('Selecione uma equipe!','error');
-    if(!pts||isNaN(pts)||pts<=0) return showToast('Informe uma pontuação válida!','error');
-    if(!date) return showToast('Informe a data!','error');
-
+    const teamId=document.getElementById('score-team').value, ginId=document.getElementById('score-gin').value;
+    const pts=Number(document.getElementById('score-pts').value), desc=document.getElementById('score-desc').value.trim(), date=document.getElementById('score-date').value;
+    const completionTime=buildCompletionTime('score-time-min','score-time-sec','score-time-ms');
+    if(!teamId)return showToast('Selecione uma equipe!','error');
+    if(!pts||isNaN(pts)||pts<=0)return showToast('Pontuação inválida!','error');
+    if(!date)return showToast('Informe a data!','error');
     await saveEntry({teamId,ginId,points:pts,desc,date,type:'bonus',completionTime});
     closeModal('modal-score');
-    const timeStr = completionTime ? ` ⏱ ${completionTime}` : '';
-    showToast(`+${pts} pts para ${teamById(teamId)?.name}!${timeStr} 🎉`,'success');
+    showToast(`+${pts} pts para ${teamById(teamId)?.name}!${completionTime?' ⏱ '+completionTime:''} 🎉`,'success');
   });
 
   // ── Salvar punição ──
   document.getElementById('btn-save-pun').addEventListener('click', async()=>{
-    const teamId=document.getElementById('pun-team').value;
-    const raw   =Number(document.getElementById('pun-pts').value);
-    const pts   =raw>0?-raw:raw;
-    const desc  =document.getElementById('pun-desc').value.trim();
-    const date  =document.getElementById('pun-date').value;
-    if(!teamId) return showToast('Selecione uma equipe!','error');
-    if(!pts||isNaN(pts)||pts>=0) return showToast('Informe uma penalidade válida!','error');
-    if(!date) return showToast('Informe a data!','error');
+    const teamId=document.getElementById('pun-team').value, raw=Number(document.getElementById('pun-pts').value), pts=raw>0?-raw:raw;
+    const desc=document.getElementById('pun-desc').value.trim(), date=document.getElementById('pun-date').value;
+    if(!teamId)return showToast('Selecione uma equipe!','error');
+    if(!pts||isNaN(pts)||pts>=0)return showToast('Penalidade inválida!','error');
+    if(!date)return showToast('Informe a data!','error');
     await saveEntry({teamId,points:pts,desc,date,type:'punishment'});
     closeModal('modal-punishment');
     showToast(`⚠️ Punição de ${pts} pts aplicada!`,'error');
   });
 
-  // ── Salvar edição de lançamento ──
-  document.getElementById('btn-save-edit-entry').addEventListener('click', saveEditEntry);
-
-  // ── Equipes CRUD ──
+  // ── Equipes ──
   document.getElementById('btn-team-save').addEventListener('click', saveTeam);
   document.getElementById('btn-team-cancel').addEventListener('click', cancelEditTeam);
-  document.getElementById('team-name-input').addEventListener('keydown', e=>{if(e.key==='Enter') saveTeam();});
+  document.getElementById('team-name-input').addEventListener('keydown', e=>{if(e.key==='Enter')saveTeam();});
 
-  // ── Gincanas CRUD ──
+  // ── Gincanas ──
   document.getElementById('btn-gin-save').addEventListener('click', saveGincana);
   document.getElementById('btn-gin-cancel').addEventListener('click', cancelEditGin);
-  document.getElementById('gin-name-input').addEventListener('keydown', e=>{if(e.key==='Enter') saveGincana();});
-
-  // ── Scoring type toggle ──
-  document.querySelectorAll('.scoring-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('gin-scoring-type').value = btn.dataset.type;
-    });
-  });
+  document.getElementById('gin-name-input').addEventListener('keydown', e=>{if(e.key==='Enter')saveGincana();});
+  document.querySelectorAll('.scoring-btn').forEach(btn=>{btn.addEventListener('click',()=>{document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');document.getElementById('gin-scoring-type').value=btn.dataset.type;});});
 
   // ── Calculadora ──
-  document.getElementById('calc-gin-select').addEventListener('change', e => {
-    onCalcGinChange(e.target.value);
-  });
+  document.getElementById('calc-gin-select').addEventListener('change', e=>onCalcGinChange(e.target.value));
   document.getElementById('btn-calc-simulate').addEventListener('click', simulateCalc);
   document.getElementById('btn-calc-oficializar').addEventListener('click', oficializarCalc);
 
+  // ── Editar lançamento ──
+  document.getElementById('btn-save-edit-entry').addEventListener('click', saveEditEntry);
+
+  // ── Relatório ──
+  document.getElementById('report-period-select').addEventListener('change', renderReport);
+  document.getElementById('btn-export-img').addEventListener('click', exportImage);
+  document.getElementById('btn-export-pdf').addEventListener('click', exportPDF);
+
   // ── History search ──
-  document.getElementById('history-search').addEventListener('input', e=>{
-    historyFilter=e.target.value;
-    renderHistory();
-  });
+  document.getElementById('history-search').addEventListener('input', e=>{historyFilter=e.target.value;renderHistory();});
 
   // ── Boot ──
   boot();
 });
 
-// ─── TOAST ──────────────────────────────────────────
-let toastTimer=null;
-function showToast(msg,type=''){
-  const t=document.getElementById('toast');
-  t.textContent=msg; t.className=`toast ${type}`;
-  t.classList.remove('hidden');
-  clearTimeout(toastTimer);
-  toastTimer=setTimeout(()=>t.classList.add('hidden'),3200);
-}
-
-// ─── SERVICE WORKER ─────────────────────────────────
-if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('sw.js').catch(()=>{});
-  });
-}
+// ─── SERVICE WORKER ──────────────────────────────────
+if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{});});}
