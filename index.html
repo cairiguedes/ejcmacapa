@@ -70,6 +70,10 @@
           <input id="reg-name" type="text" placeholder="Ex: João Silva" />
         </div>
         <div class="form-field">
+          <label>Nome de usuário (assinatura)</label>
+          <input id="reg-username" type="text" placeholder="Ex: Cairi" />
+        </div>
+        <div class="form-field">
           <label>E-mail</label>
           <input id="reg-email" type="email" placeholder="seu@email.com" autocomplete="email" />
         </div>
@@ -340,6 +344,15 @@
       <p style="font-size:.82rem;color:var(--muted);line-height:1.6;margin-bottom:.5rem">
         Aprove ou bloqueie solicitações de acesso como administrador.
       </p>
+      <!-- Perfil do admin logado -->
+      <div id="my-profile-form" style="margin-top:.5rem;display:flex;flex-direction:column;gap:.6rem">
+        <div style="font-size:.75rem;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Meu nome de usuário (assinatura)</div>
+        <div style="display:flex;gap:.5rem">
+          <input id="my-username-input" type="text" placeholder="Ex: Cairi" style="flex:1;background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);padding:.6rem .85rem;font-family:'Nunito',sans-serif;font-size:.92rem;" />
+          <button id="btn-save-username" style="background:linear-gradient(135deg,var(--gold),var(--gold2));color:var(--bg);border:none;border-radius:var(--radius-sm);padding:.6rem 1rem;font-family:'Nunito',sans-serif;font-weight:900;font-size:.88rem;cursor:pointer;white-space:nowrap;">Salvar</button>
+        </div>
+        <div style="font-size:.72rem;color:var(--muted)">Este nome aparecerá como assinatura em todos os seus lançamentos.</div>
+      </div>
     </div>
     <div class="section-title mt-2">AGUARDANDO APROVAÇÃO <span id="pending-count" class="count-badge" style="background:var(--red)"></span></div>
     <div id="pending-list" class="entity-list"></div>

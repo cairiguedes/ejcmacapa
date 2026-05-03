@@ -19,8 +19,23 @@ let gincanas = [];
 let profiles = [];   // todos os perfis (para o painel admin)
 
 let currentUser    = null;  // objeto do Supabase Auth
-let currentProfile = null;  // { id, email, name, role }
+let currentProfile = null;  // { id, email, name, username, role }
 let isGuest        = false; // visitante sem login
+
+// Helper central — retorna true se pode escrever dados
+function canWrite() {
+  if (isGuest) return false;
+  return ['admin','superadmin'].includes(currentProfile?.role);
+}
+
+// Guard: bloqueia ação e avisa o visitante
+function requireAdmin(action) {
+  if (!canWrite()) {
+    showToast('🔒 Acesso restrito. Faça login como administrador.', 'error');
+    return false;
+  }
+  return true;
+}
 
 let barChart = null, lineChart = null;
 let historyFilter = '';
@@ -113,10 +128,18 @@ async function resolveUserRole() {
 
   // Superadmin definido no código — acesso imediato
   if (SUPER_ADMINS.includes(email)) {
-    currentProfile = { id: currentUser.id, email, name: email, role: 'superadmin' };
-    // Garante que o perfil existe no banco
+    const { data: existingProfile } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
+    currentProfile = {
+      id: currentUser.id, email,
+      name:     existingProfile?.name     || email,
+      username: existingProfile?.username || '',
+      role: 'superadmin'
+    };
     await sb.from('profiles').upsert({
-      id: currentUser.id, email, name: email, role: 'superadmin'
+      id: currentUser.id, email,
+      name: currentProfile.name,
+      username: currentProfile.username,
+      role: 'superadmin'
     }, { onConflict: 'id' });
     await launchApp();
     return;
@@ -126,16 +149,27 @@ async function resolveUserRole() {
   const { data: profile } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
 
   if (!profile) {
-    // Cria perfil como pending
-    await sb.from('profiles').insert({ id: currentUser.id, email, name: currentUser.user_metadata?.name||email, role: 'pending' });
+    // Cria perfil como pending e aguarda aprovação em tempo real
+    await sb.from('profiles').insert({
+      id: currentUser.id, email,
+      name: currentUser.user_metadata?.name || email,
+      username: currentUser.user_metadata?.username || '',
+      role: 'pending'
+    });
     hideSplash();
     showPendingScreen();
+    watchPendingProfile(); // ← escuta o banco em tempo real
     return;
   }
 
   currentProfile = profile;
 
-  if (profile.role === 'pending') { hideSplash(); showPendingScreen(); return; }
+  if (profile.role === 'pending') {
+    hideSplash();
+    showPendingScreen();
+    watchPendingProfile(); // ← escuta o banco em tempo real
+    return;
+  }
   if (profile.role === 'blocked') {
     hideSplash();
     showAuthScreen();
@@ -146,6 +180,49 @@ async function resolveUserRole() {
 
   // admin ou superadmin
   await launchApp();
+}
+
+// Fica escutando o perfil do usuário pendente no Realtime
+// Quando o admin aprovar, o app reage automaticamente sem precisar recarregar
+let pendingWatcher = null;
+function watchPendingProfile() {
+  // Evita múltiplas inscrições
+  if (pendingWatcher) { pendingWatcher.unsubscribe(); }
+
+  pendingWatcher = sb
+    .channel('profile-watch-' + currentUser.id)
+    .on(
+      'postgres_changes',
+      {
+        event:  'UPDATE',
+        schema: 'public',
+        table:  'profiles',
+        filter: `id=eq.${currentUser.id}`
+      },
+      async (payload) => {
+        const newRole = payload.new?.role;
+
+        if (newRole === 'admin' || newRole === 'superadmin') {
+          // Foi aprovado! Recarrega o perfil e entra no app
+          pendingWatcher.unsubscribe();
+          const { data: updatedProfile } = await sb
+            .from('profiles').select('*').eq('id', currentUser.id).single();
+          currentProfile = updatedProfile;
+          showToast('✅ Acesso aprovado! Bem-vindo(a)!', 'success');
+          await launchApp();
+
+        } else if (newRole === 'blocked') {
+          // Foi bloqueado
+          pendingWatcher.unsubscribe();
+          await sb.auth.signOut();
+          currentUser = null; currentProfile = null;
+          showAuthScreen();
+          showAuthError('login', 'Seu acesso foi bloqueado pelo administrador.');
+        }
+        // Se continuar 'pending', não faz nada
+      }
+    )
+    .subscribe();
 }
 
 // ─── LANÇAR O APP ───────────────────────────────────
@@ -220,25 +297,26 @@ async function doLogin() {
 }
 
 async function doRegister() {
-  const name  = document.getElementById('reg-name').value.trim();
-  const email = document.getElementById('reg-email').value.trim();
-  const pass  = document.getElementById('reg-password').value;
+  const name     = document.getElementById('reg-name').value.trim();
+  const username = document.getElementById('reg-username').value.trim();
+  const email    = document.getElementById('reg-email').value.trim();
+  const pass     = document.getElementById('reg-password').value;
   clearAuthErrors();
   if (!name || !email || !pass) return showAuthError('reg', 'Preencha todos os campos.');
   if (pass.length < 6)          return showAuthError('reg', 'Senha deve ter mínimo 6 caracteres.');
 
   const { data, error } = await sb.auth.signUp({
     email, password: pass,
-    options: { data: { name } }
+    options: { data: { name, username } }
   });
   if (error) return showAuthError('reg', error.message || 'Erro ao criar conta.');
 
-  // Cria perfil pending
   if (data.user) {
-    await sb.from('profiles').insert({ id: data.user.id, email, name, role: 'pending' });
+    await sb.from('profiles').insert({
+      id: data.user.id, email, name, username: username||name, role: 'pending'
+    });
   }
 
-  // Troca para painel de login com mensagem
   document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
   document.querySelector('[data-auth="login"]').classList.add('active');
   document.getElementById('auth-panel-login').classList.remove('hidden');
@@ -246,7 +324,25 @@ async function doRegister() {
   showToast('Cadastro enviado! Aguarde aprovação do admin. 🎉', 'success');
 }
 
+async function saveUsername() {
+  if (!requireAdmin()) return;
+  const username = document.getElementById('my-username-input').value.trim();
+  if (!username) return showToast('Digite um nome de usuário!', 'error');
+  const { error } = await sb.from('profiles').update({ username }).eq('id', currentProfile.id);
+  if (error) return showToast('Erro ao salvar: ' + error.message, 'error');
+  currentProfile.username = username;
+  showToast(`Assinatura salva como "${username}"! ✅`, 'success');
+}
+
+function populateMyProfile() {
+  const input = document.getElementById('my-username-input');
+  if (input && currentProfile) {
+    input.value = currentProfile.username || currentProfile.name || '';
+  }
+}
+
 async function doLogout() {
+  if (pendingWatcher) { pendingWatcher.unsubscribe(); pendingWatcher = null; }
   await sb.auth.signOut();
   currentUser = null; currentProfile = null; isGuest = false;
   document.body.classList.remove('is-admin');
@@ -404,7 +500,7 @@ function renderAll() {
   renderGincanasTab();
   renderCalcTab();
   renderReport();
-  if (currentProfile?.role === 'superadmin') renderAdminPanel();
+  if (currentProfile?.role === 'superadmin') { renderAdminPanel(); populateMyProfile(); }
   populateSelects();
   if (!document.getElementById('tab-charts').classList.contains('hidden')) renderCharts();
 }
@@ -481,7 +577,7 @@ function getDaysInRange(start,end){const days=[],cur=new Date(start),last=new Da
 
 // ─── HISTORY ─────────────────────────────────────────
 function renderHistory() {
-  const isAdmin = !isGuest && ['admin','superadmin'].includes(currentProfile?.role);
+  const isAdmin = canWrite();
   const base=getFilteredEntries();
   const all=base.filter(e=>{
     if(!historyFilter)return true;
@@ -496,10 +592,11 @@ function renderHistory() {
   list.innerHTML=all.map(e=>{
     const neg=e.points<0, team=teamById(e.team_id), gin=e.gin_id?ginById(e.gin_id):null;
     const parts=(e.data_entry||'--').split('-'), [y,m,d]=parts.length===3?parts:['?','?','?'];
+    const lancadoPor = e.launched_by_name ? `✍️ ${escHtml(e.launched_by_name)}` : '';
     return `<div class="history-item ${neg?'punishment':''}">
       <div class="history-main">
         <div class="history-team">${escHtml(team?.name||'?')}${neg?'<span class="score-badge-pun">PUNIÇÃO</span>':''}</div>
-        <div class="history-meta">${d}/${m}/${y} · ${e.tipo==='punishment'?'Punição':'Pontuação'}</div>
+        <div class="history-meta">${d}/${m}/${y} · ${e.tipo==='punishment'?'Punição':'Pontuação'}${lancadoPor?' · '+lancadoPor:''}</div>
         ${gin?`<div class="history-gin">🎯 ${escHtml(gin.name)}</div>`:''}
         ${e.descricao?`<div class="history-desc">${escHtml(e.descricao)}</div>`:''}
       </div>
@@ -586,16 +683,22 @@ function renderEquipesTab() {
 }
 function startEditTeam(id){const t=teams.find(x=>x.id===id);if(!t)return;editingTeamId=id;document.getElementById('team-name-input').value=t.name;document.getElementById('team-color-input').value=t.color;document.getElementById('team-form-title').textContent='✏️ Editar Equipe';document.getElementById('team-form-title').classList.add('editing-mode');document.getElementById('team-form-card').classList.add('editing');document.getElementById('btn-team-save').textContent='Salvar Alterações';document.getElementById('btn-team-save').classList.add('blue-mode');document.getElementById('btn-team-cancel').style.display='';document.getElementById('team-form-card').scrollIntoView({behavior:'smooth',block:'start'});}
 function cancelEditTeam(){editingTeamId=null;document.getElementById('team-name-input').value='';document.getElementById('team-color-input').value='#f59e0b';document.getElementById('team-form-title').textContent='✨ Nova Equipe';document.getElementById('team-form-title').classList.remove('editing-mode');document.getElementById('team-form-card').classList.remove('editing');document.getElementById('btn-team-save').textContent='+ Adicionar Equipe';document.getElementById('btn-team-save').classList.remove('blue-mode');document.getElementById('btn-team-cancel').style.display='none';}
-async function saveTeam(){const name=document.getElementById('team-name-input').value.trim(),color=document.getElementById('team-color-input').value;if(!name)return showToast('Digite o nome!','error');const dup=teams.find(t=>t.name.toLowerCase()===name.toLowerCase()&&t.id!==editingTeamId);if(dup)return showToast('Nome já existe!','error');if(editingTeamId){const{error}=await sb.from('teams').update({name,color}).eq('id',editingTeamId);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`"${name}" atualizada! ✅`,'success');cancelEditTeam();}else{const{error}=await sb.from('teams').insert({name,color});if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`Equipe "${name}" criada! 🙌`,'success');document.getElementById('team-name-input').value='';}}
-function confirmDeleteTeam(id){const t=teams.find(x=>x.id===id);if(!t)return;const n=entries.filter(e=>e.team_id===id).length;document.getElementById('confirm-title').textContent='Excluir Equipe';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(t.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteTeam(id);openModal('modal-confirm');}
+async function saveTeam(){
+  if (!requireAdmin()) return;
+  const name=document.getElementById('team-name-input').value.trim(),color=document.getElementById('team-color-input').value;if(!name)return showToast('Digite o nome!','error');const dup=teams.find(t=>t.name.toLowerCase()===name.toLowerCase()&&t.id!==editingTeamId);if(dup)return showToast('Nome já existe!','error');if(editingTeamId){const{error}=await sb.from('teams').update({name,color}).eq('id',editingTeamId);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`"${name}" atualizada! ✅`,'success');cancelEditTeam();}else{const{error}=await sb.from('teams').insert({name,color});if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`Equipe "${name}" criada! 🙌`,'success');document.getElementById('team-name-input').value='';}
+}
+function confirmDeleteTeam(id){if(!requireAdmin())return;const t=teams.find(x=>x.id===id);if(!t)return;const n=entries.filter(e=>e.team_id===id).length;document.getElementById('confirm-title').textContent='Excluir Equipe';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(t.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteTeam(id);openModal('modal-confirm');}
 async function deleteTeam(id){const{error}=await sb.from('teams').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}if(editingTeamId===id)cancelEditTeam();showToast('Equipe excluída.','info');}
 
 // ─── GINCANAS CRUD ───────────────────────────────────
 function renderGincanasTab(){const list=document.getElementById('gincanas-list'),count=document.getElementById('gincanas-count');count.textContent=gincanas.length||'';if(!gincanas.length){list.innerHTML=`<div class="empty-state"><span class="empty-icon">🎯</span>Nenhuma gincana.</div>`;return;}list.innerHTML=gincanas.map(g=>{const hasObs=g.obs&&g.obs.trim().length>0;return`<div class="gin-entity-item"><div class="gin-entity-header"><span class="gin-entity-name">🎯 ${escHtml(g.name)}</span><div class="entity-actions"><button class="btn-edit" data-edit-gin="${g.id}">✏️</button><button class="btn-delete" data-del-gin="${g.id}">🗑</button></div></div><div class="gin-entity-meta">${g.data_gin?`<span class="gin-entity-date">📅 ${fmtDate(g.data_gin)}</span>`:''}${g.max_pts?`<span class="gin-entity-maxpts">${g.max_pts} pts máx.</span>`:''}${g.scoring_type?`<span class="gin-entity-maxpts">${g.scoring_type==='time'?'⏱ TEMPO':'🏅 PONTOS'}</span>`:''}</div>${hasObs?`<div class="gin-entity-obs-preview">${escHtml(g.obs)}</div><button class="gin-see-more" data-view-gin="${g.id}">Ver dinâmica →</button>`:''}</div>`;}).join('');list.querySelectorAll('[data-edit-gin]').forEach(btn=>btn.addEventListener('click',()=>startEditGin(btn.dataset.editGin)));list.querySelectorAll('[data-del-gin]').forEach(btn=>btn.addEventListener('click',()=>confirmDeleteGin(btn.dataset.delGin)));list.querySelectorAll('[data-view-gin]').forEach(btn=>btn.addEventListener('click',()=>viewGinDetail(btn.dataset.viewGin)));}
 function startEditGin(id){const g=gincanas.find(x=>x.id===id);if(!g)return;editingGinId=id;document.getElementById('gin-name-input').value=g.name;document.getElementById('gin-date-input').value=g.data_gin||'';document.getElementById('gin-maxpts-input').value=g.max_pts||'';document.getElementById('gin-obs-input').value=g.obs||'';const st=g.scoring_type||'points';document.getElementById('gin-scoring-type').value=st;document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));document.getElementById(st==='time'?'gin-type-time':'gin-type-points').classList.add('active');document.getElementById('gin-form-title').textContent='✏️ Editar Gincana';document.getElementById('gin-form-title').classList.add('editing-mode');document.getElementById('gin-form-card').classList.add('editing');document.getElementById('btn-gin-save').textContent='Salvar Alterações';document.getElementById('btn-gin-save').classList.add('blue-mode');document.getElementById('btn-gin-cancel').style.display='';document.getElementById('gin-form-card').scrollIntoView({behavior:'smooth',block:'start'});}
 function cancelEditGin(){editingGinId=null;document.getElementById('gin-name-input').value='';document.getElementById('gin-date-input').value=today();document.getElementById('gin-maxpts-input').value='';document.getElementById('gin-obs-input').value='';document.getElementById('gin-scoring-type').value='points';document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));document.getElementById('gin-type-points').classList.add('active');document.getElementById('gin-form-title').textContent='✨ Nova Gincana';document.getElementById('gin-form-title').classList.remove('editing-mode');document.getElementById('gin-form-card').classList.remove('editing');document.getElementById('btn-gin-save').textContent='+ Criar Gincana';document.getElementById('btn-gin-save').classList.remove('blue-mode');document.getElementById('btn-gin-cancel').style.display='none';}
-async function saveGincana(){const name=document.getElementById('gin-name-input').value.trim(),date=document.getElementById('gin-date-input').value,maxPts=document.getElementById('gin-maxpts-input').value,obs=document.getElementById('gin-obs-input').value.trim(),scoringType=document.getElementById('gin-scoring-type').value||'points';if(!name)return showToast('Digite o nome!','error');const payload={name,data_gin:date||null,max_pts:maxPts?Number(maxPts):null,obs:obs||null,scoring_type:scoringType};if(editingGinId){const{error}=await sb.from('gincanas').update(payload).eq('id',editingGinId);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`"${name}" atualizada! ✅`,'success');cancelEditGin();}else{const{error}=await sb.from('gincanas').insert(payload);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`Gincana "${name}" criada! 🎯`,'success');document.getElementById('gin-name-input').value='';document.getElementById('gin-maxpts-input').value='';document.getElementById('gin-obs-input').value='';}}
-function confirmDeleteGin(id){const g=gincanas.find(x=>x.id===id);if(!g)return;const n=entries.filter(e=>e.gin_id===id).length;document.getElementById('confirm-title').textContent='Excluir Gincana';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(g.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteGincana(id);openModal('modal-confirm');}
+async function saveGincana(){
+  if(!requireAdmin())return;
+  const name=document.getElementById('gin-name-input').value.trim(),date=document.getElementById('gin-date-input').value,maxPts=document.getElementById('gin-maxpts-input').value,obs=document.getElementById('gin-obs-input').value.trim(),scoringType=document.getElementById('gin-scoring-type').value||'points';if(!name)return showToast('Digite o nome!','error');const payload={name,data_gin:date||null,max_pts:maxPts?Number(maxPts):null,obs:obs||null,scoring_type:scoringType};if(editingGinId){const{error}=await sb.from('gincanas').update(payload).eq('id',editingGinId);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`"${name}" atualizada! ✅`,'success');cancelEditGin();}else{const{error}=await sb.from('gincanas').insert(payload);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`Gincana "${name}" criada! 🎯`,'success');document.getElementById('gin-name-input').value='';document.getElementById('gin-maxpts-input').value='';document.getElementById('gin-obs-input').value='';}
+}
+function confirmDeleteGin(id){if(!requireAdmin())return;const g=gincanas.find(x=>x.id===id);if(!g)return;const n=entries.filter(e=>e.gin_id===id).length;document.getElementById('confirm-title').textContent='Excluir Gincana';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(g.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteGincana(id);openModal('modal-confirm');}
 async function deleteGincana(id){const{error}=await sb.from('gincanas').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}if(editingGinId===id)cancelEditGin();showToast('Gincana excluída.','info');}
 function viewGinDetail(id){const g=gincanas.find(x=>x.id===id);if(!g)return;document.getElementById('gin-detail-title').textContent=`🎯 ${g.name}`;document.getElementById('gin-detail-body').innerHTML=`<div class="gin-detail-meta">${g.data_gin?`<span class="gin-detail-chip">📅 ${fmtDate(g.data_gin)}</span>`:''}${g.max_pts?`<span class="gin-detail-chip">🏅 ${g.max_pts} pts</span>`:''}${g.scoring_type?`<span class="gin-detail-chip">${g.scoring_type==='time'?'⏱ TEMPO':'🏅 PONTOS'}</span>`:''}</div>${g.obs?`<div class="gin-detail-obs-label">📝 Dinâmica</div><div class="gin-detail-obs">${escHtml(g.obs)}</div>`:'<p style="color:var(--muted)">Sem observações.</p>'}`;openModal('modal-gin-detail');}
 
@@ -605,16 +708,43 @@ function onCalcGinChange(ginId){const g=ginById(ginId),badge=document.getElement
 function timeToMs(str){if(!str)return Infinity;const[mm,ss,ms]=str.split(':').map(Number);return((mm||0)*60*1000)+((ss||0)*1000)+(ms||0)*10;}
 function simulateCalc(){const ginId=document.getElementById('calc-gin-select').value,g=ginById(ginId);if(!g)return showToast('Selecione uma gincana!','error');const isTime=g.scoring_type==='time';const rows=teams.map(t=>{if(isTime){const min=document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="min"]`)?.value||'',sec=document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="sec"]`)?.value||'',ms=document.querySelector(`.calc-time-inp[data-team="${t.id}"][data-part="ms"]`)?.value||'';const timeStr=(min||sec||ms)?`${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`:null;return{teamId:t.id,name:t.name,color:t.color,time:timeStr,value:timeToMs(timeStr)};}else{const val=Number(document.querySelector(`.calc-pts-input[data-team="${t.id}"]`)?.value||0);return{teamId:t.id,name:t.name,color:t.color,value:val,time:null};}});const filled=rows.filter(r=>isTime?r.time!==null:r.value>0);if(!filled.length)return showToast(isTime?'Preencha o tempo de pelo menos uma equipe!':'Preencha a pontuação de pelo menos uma equipe!','error');filled.sort((a,b)=>isTime?a.value-b.value:b.value-a.value);const pts=[100,80,60,40,30,20,10];calcSimResult=filled.map((r,i)=>({...r,pts:isTime?(pts[i]??5):r.value,pos:i+1}));renderCalcResult(isTime);document.getElementById('calc-result').classList.remove('hidden');document.getElementById('calc-result').scrollIntoView({behavior:'smooth',block:'start'});}
 function renderCalcResult(isTime){const posClass=i=>['gold','silver','bronze'][i]||'normal',medals=['🥇','🥈','🥉'];document.getElementById('calc-result-list').innerHTML=calcSimResult.map((r,i)=>`<div class="calc-result-item ${i<3?'rank-'+(i+1):''}"><span class="calc-res-pos ${posClass(i)}">${medals[i]||r.pos+'º'}</span><span class="calc-res-dot" style="background:${r.color}"></span><div class="calc-res-info"><div class="calc-res-name">${escHtml(r.name)}</div>${r.time?`<div class="calc-res-time">⏱ ${r.time}</div>`:''}${!isTime?`<div class="calc-res-time">Bruto: ${r.value}</div>`:''}</div><div class="calc-res-pts">+${r.pts}</div></div>`).join('');}
-async function oficializarCalc(){const ginId=document.getElementById('calc-gin-select').value,g=ginById(ginId);if(!g||!calcSimResult.length)return showToast('Nada para oficializar!','error');const btn=document.getElementById('btn-calc-oficializar');btn.disabled=true;btn.textContent='⏳ Salvando...';let erros=0;for(const r of calcSimResult){const{error}=await sb.from('entries').insert({team_id:r.teamId,gin_id:ginId,points:r.pts,descricao:`Calculadora — ${g.name} — ${r.pos}º lugar`,data_entry:today(),tipo:'bonus',completion_time:r.time||null});if(error){console.error(error);erros++;}}btn.disabled=false;btn.textContent='✅ Oficializar Resultados';if(erros>0){showToast(`${erros} erro(s) ao salvar.`,'error');}else{showToast(`${calcSimResult.length} lançamentos oficializados! 🎉`,'success');calcSimResult=[];document.getElementById('calc-result').classList.add('hidden');document.getElementById('calc-gin-select').value='';document.getElementById('calc-type-badge').classList.add('hidden');document.getElementById('calc-teams-area').innerHTML='';document.getElementById('calc-actions').style.display='none';}}
+async function oficializarCalc(){
+  if(!requireAdmin())return;
+  const ginId=document.getElementById('calc-gin-select').value,g=ginById(ginId);if(!g||!calcSimResult.length)return showToast('Nada para oficializar!','error');const btn=document.getElementById('btn-calc-oficializar');btn.disabled=true;btn.textContent='⏳ Salvando...';
+  const launchedByName = currentProfile?.username || currentProfile?.name || currentProfile?.email || '';
+  const launchedById   = currentProfile?.id || null;
+  let erros=0;for(const r of calcSimResult){const{error}=await sb.from('entries').insert({team_id:r.teamId,gin_id:ginId,points:r.pts,descricao:`Calculadora — ${g.name} — ${r.pos}º lugar`,data_entry:today(),tipo:'bonus',completion_time:r.time||null,launched_by_id:launchedById,launched_by_name:launchedByName});if(error){console.error(error);erros++;}}btn.disabled=false;btn.textContent='✅ Oficializar Resultados';if(erros>0){showToast(`${erros} erro(s) ao salvar.`,'error');}else{showToast(`${calcSimResult.length} lançamentos oficializados! 🎉`,'success');calcSimResult=[];document.getElementById('calc-result').classList.add('hidden');document.getElementById('calc-gin-select').value='';document.getElementById('calc-type-badge').classList.add('hidden');document.getElementById('calc-teams-area').innerHTML='';document.getElementById('calc-actions').style.display='none';}
+}
 
 // ─── ENTRY EDIT/DELETE ───────────────────────────────
 function openEditEntry(id){const e=entries.find(x=>x.id===id);if(!e)return;const teamOpts=teams.map(t=>`<option value="${t.id}" ${t.id===e.team_id?'selected':''}>${escHtml(t.name)}</option>`).join('');const ginOpts=gincanas.map(g=>`<option value="${g.id}" ${g.id===e.gin_id?'selected':''}>${escHtml(g.name)}</option>`).join('');document.getElementById('edit-entry-id').value=e.id;document.getElementById('edit-entry-team').innerHTML='<option value="">— selecione —</option>'+teamOpts;document.getElementById('edit-entry-gin').innerHTML='<option value="">— nenhuma —</option>'+ginOpts;document.getElementById('edit-entry-pts').value=e.points;document.getElementById('edit-entry-desc').value=e.descricao||'';document.getElementById('edit-entry-date').value=e.data_entry;if(e.completion_time){const parts=e.completion_time.split(':');document.getElementById('edit-time-min').value=parts[0]||'';document.getElementById('edit-time-sec').value=parts[1]||'';document.getElementById('edit-time-ms').value=parts[2]||'';}else{document.getElementById('edit-time-min').value='';document.getElementById('edit-time-sec').value='';document.getElementById('edit-time-ms').value='';}const box=document.getElementById('modal-edit-entry').querySelector('.modal-box');if(e.tipo==='punishment'){box.classList.add('punishment-box');document.getElementById('edit-entry-modal-title').textContent='⚠️ Editar Punição';}else{box.classList.remove('punishment-box');document.getElementById('edit-entry-modal-title').textContent='✏️ Editar Lançamento';}openModal('modal-edit-entry');}
-async function saveEditEntry(){const id=document.getElementById('edit-entry-id').value,team_id=document.getElementById('edit-entry-team').value,gin_id=document.getElementById('edit-entry-gin').value,points=Number(document.getElementById('edit-entry-pts').value),descricao=document.getElementById('edit-entry-desc').value.trim(),data_entry=document.getElementById('edit-entry-date').value;const min=document.getElementById('edit-time-min').value,sec=document.getElementById('edit-time-sec').value,ms=document.getElementById('edit-time-ms').value;const completionTime=(min||sec||ms)?`${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`:null;if(!team_id)return showToast('Selecione uma equipe!','error');if(!points||isNaN(points))return showToast('Informe a pontuação!','error');if(!data_entry)return showToast('Informe a data!','error');const entry=entries.find(x=>x.id===id);const tipo=entry?.tipo||(points<0?'punishment':'bonus');const{error}=await sb.from('entries').update({team_id,gin_id:gin_id||null,points,descricao,data_entry,tipo,completion_time:completionTime||null}).eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}closeModal('modal-edit-entry');showToast('Lançamento atualizado! ✅','success');}
-function confirmDeleteEntry(id){const e=entries.find(x=>x.id===id);if(!e)return;const team=teamById(e.team_id);document.getElementById('confirm-title').textContent='Excluir Lançamento';document.getElementById('confirm-message').innerHTML=`Excluir lançamento de <strong>${e.points>0?'+':''}${e.points} pts</strong> para <strong>${escHtml(team?.name||'?')}</strong> em <strong>${fmtDate(e.data_entry)}</strong>?<br><br>⚠️ Ação <strong>não pode ser desfeita</strong>.`;confirmCallback=()=>deleteEntry(id);openModal('modal-confirm');}
+async function saveEditEntry(){
+  if(!requireAdmin())return;
+  const id=document.getElementById('edit-entry-id').value,team_id=document.getElementById('edit-entry-team').value,gin_id=document.getElementById('edit-entry-gin').value,points=Number(document.getElementById('edit-entry-pts').value),descricao=document.getElementById('edit-entry-desc').value.trim(),data_entry=document.getElementById('edit-entry-date').value;const min=document.getElementById('edit-time-min').value,sec=document.getElementById('edit-time-sec').value,ms=document.getElementById('edit-time-ms').value;const completionTime=(min||sec||ms)?`${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`:null;if(!team_id)return showToast('Selecione uma equipe!','error');if(!points||isNaN(points))return showToast('Informe a pontuação!','error');if(!data_entry)return showToast('Informe a data!','error');const entry=entries.find(x=>x.id===id);const tipo=entry?.tipo||(points<0?'punishment':'bonus');const{error}=await sb.from('entries').update({team_id,gin_id:gin_id||null,points,descricao,data_entry,tipo,completion_time:completionTime||null}).eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}closeModal('modal-edit-entry');showToast('Lançamento atualizado! ✅','success');
+}
+function confirmDeleteEntry(id){if(!requireAdmin())return;const e=entries.find(x=>x.id===id);if(!e)return;const team=teamById(e.team_id);document.getElementById('confirm-title').textContent='Excluir Lançamento';document.getElementById('confirm-message').innerHTML=`Excluir lançamento de <strong>${e.points>0?'+':''}${e.points} pts</strong> para <strong>${escHtml(team?.name||'?')}</strong> em <strong>${fmtDate(e.data_entry)}</strong>?<br><br>⚠️ Ação <strong>não pode ser desfeita</strong>.`;confirmCallback=()=>deleteEntry(id);openModal('modal-confirm');}
 async function deleteEntry(id){const{error}=await sb.from('entries').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast('Lançamento excluído.','info');}
 
 // ─── ENTRY SAVE ──────────────────────────────────────
-async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}){const payload={team_id:teamId,gin_id:ginId||null,points:Number(points),descricao:desc||'',data_entry:date,tipo:type,completion_time:completionTime||null};const{error}=await sb.from('entries').insert(payload);if(error){console.error(error);showToast('Erro: '+error.message,'error');}}
+async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}){
+  if (!requireAdmin()) return;
+  // Assinatura: usa username se definido, senão nome, senão email
+  const launchedByName = currentProfile?.username || currentProfile?.name || currentProfile?.email || '';
+  const launchedById   = currentProfile?.id || null;
+  const payload={
+    team_id:          teamId,
+    gin_id:           ginId||null,
+    points:           Number(points),
+    descricao:        desc||'',
+    data_entry:       date,
+    tipo:             type,
+    completion_time:  completionTime||null,
+    launched_by_id:   launchedById,
+    launched_by_name: launchedByName
+  };
+  const{error}=await sb.from('entries').insert(payload);
+  if(error){console.error(error);showToast('Erro: '+error.message,'error');}
+}
 
 // ─── SELECTS ─────────────────────────────────────────
 function populateSelects(){const teamOpts=teams.length?teams.map(t=>`<option value="${t.id}">${escHtml(t.name)}</option>`).join(''):'<option disabled>Nenhuma equipe</option>';const ginOpts=gincanas.map(g=>`<option value="${g.id}">${escHtml(g.name)}</option>`).join('');function rebuild(id,prefix,extra){const sel=document.getElementById(id),cur=sel.value;sel.innerHTML=prefix+extra;if(cur&&sel.querySelector(`option[value="${cur}"]`))sel.value=cur;}rebuild('score-team','<option value="">— selecione a equipe —</option>',teamOpts);rebuild('pun-team','<option value="">— selecione a equipe —</option>',teamOpts);rebuild('score-gin','<option value="">— nenhuma —</option>',ginOpts);}
@@ -816,6 +946,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── History search ──
   document.getElementById('history-search').addEventListener('input', e=>{historyFilter=e.target.value;renderHistory();});
+
+  // ── Username / assinatura ──
+  document.getElementById('btn-save-username')?.addEventListener('click', saveUsername);
+  document.getElementById('my-username-input')?.addEventListener('keydown', e=>{if(e.key==='Enter')saveUsername();});
 
   // ── Boot ──
   boot();
