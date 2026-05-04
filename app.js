@@ -188,27 +188,32 @@ async function resolveUserRole() {
 let pendingWatcher = null;
 
 function watchPendingProfile() {
-  // Cancela qualquer watcher anterior
+  // Cancela qualquer watcher anterior para não duplicar processos
   if (pendingWatcher) { clearInterval(pendingWatcher); pendingWatcher = null; }
 
   pendingWatcher = setInterval(async () => {
     if (!currentUser) { clearInterval(pendingWatcher); return; }
 
+    // Busca apenas o campo role para verificar a aprovação
     const { data: profile, error } = await sb
-      .from('profiles').select('role').eq('id', currentUser.id).single();
+      .from('profiles').select('*').eq('id', currentUser.id).single();
 
-    if (error || !profile) return; // silencia erros de rede, tenta de novo
+    if (error || !profile) return; 
 
     const role = profile.role;
 
+    // Se o status mudou de 'pending' para 'admin' ou 'superadmin'
     if (role === 'admin' || role === 'superadmin') {
       clearInterval(pendingWatcher);
       pendingWatcher = null;
-      // Recarrega perfil completo e entra
-      const { data: fullProfile } = await sb
-        .from('profiles').select('*').eq('id', currentUser.id).single();
-      currentProfile = fullProfile;
+      
+      // ATUALIZA A VARIÁVEL GLOBAL antes de entrar no app
+      currentProfile = profile; 
+      
       showToast('✅ Acesso aprovado! Bem-vindo(a)!', 'success');
+      
+      // Esconde as telas de bloqueio e lança o app
+      hideAllScreens();
       await launchApp();
 
     } else if (role === 'blocked') {
@@ -219,10 +224,8 @@ function watchPendingProfile() {
       showAuthScreen();
       showAuthError('login', 'Seu acesso foi bloqueado pelo administrador.');
     }
-    // 'pending' → continua esperando
-  }, 5000); // verifica a cada 5 segundos
+  }, 5000); // Verifica a cada 5 segundos
 }
-
 // ─── LANÇAR O APP ───────────────────────────────────
 async function launchApp() {
   await Promise.all([loadTeams(), loadEntries(), loadGincanas(), loadProfiles()]);
