@@ -188,43 +188,44 @@ async function resolveUserRole() {
 let pendingWatcher = null;
 
 function watchPendingProfile() {
-  // Cancela qualquer watcher anterior para não duplicar processos
   if (pendingWatcher) { clearInterval(pendingWatcher); pendingWatcher = null; }
 
   pendingWatcher = setInterval(async () => {
     if (!currentUser) { clearInterval(pendingWatcher); return; }
 
-    // Busca apenas o campo role para verificar a aprovação
+    // Força a busca sem cache do Supabase
     const { data: profile, error } = await sb
-      .from('profiles').select('*').eq('id', currentUser.id).single();
+      .from('profiles')
+      .select('*')
+      .eq('id', currentUser.id)
+      .single();
 
-    if (error || !profile) return; 
+    if (error || !profile) return;
 
-    const role = profile.role;
+    // Log para você testar no console (F12) se o status está mudando mesmo
+    console.log("Checando status atual:", profile.role);
 
-    // Se o status mudou de 'pending' para 'admin' ou 'superadmin'
-    if (role === 'admin' || role === 'superadmin') {
+    if (profile.role === 'admin' || profile.role === 'superadmin') {
       clearInterval(pendingWatcher);
       pendingWatcher = null;
       
-      // ATUALIZA A VARIÁVEL GLOBAL antes de entrar no app
       currentProfile = profile; 
       
-      showToast('✅ Acesso aprovado! Bem-vindo(a)!', 'success');
+      // ORDEM CRÍTICA: Primeiro limpa as telas de erro/pendência, depois lança o app
+      hideAllScreens(); 
+      document.getElementById('pending-screen').classList.add('hidden');
       
-      // Esconde as telas de bloqueio e lança o app
-      hideAllScreens();
+      showToast('✅ Acesso aprovado! Entrando...', 'success');
       await launchApp();
 
-    } else if (role === 'blocked') {
+    } else if (profile.role === 'blocked') {
       clearInterval(pendingWatcher);
       pendingWatcher = null;
       await sb.auth.signOut();
-      currentUser = null; currentProfile = null;
       showAuthScreen();
-      showAuthError('login', 'Seu acesso foi bloqueado pelo administrador.');
+      showAuthError('login', 'Seu acesso foi bloqueado.');
     }
-  }, 5000); // Verifica a cada 5 segundos
+  }, 4000); // 4 segundos para ser mais rápido
 }
 // ─── LANÇAR O APP ───────────────────────────────────
 async function launchApp() {
