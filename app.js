@@ -317,32 +317,29 @@ async function doLogin() {
   clearAuthErrors();
   if (!email || !pass) return showAuthError('login', 'Preencha e-mail e senha.');
 
-  // Feedback visual enquanto processa
   const btn = document.getElementById('btn-login');
   btn.textContent = 'Entrando...';
   btn.disabled = true;
 
-  try {
-    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+  const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
 
-    if (error) {
-      showAuthError('login', traduzirErroAuth(error.message));
-      return;
-    }
-
-    // Se o Supabase exige confirmação de e-mail, session vem null
-    if (!data.session) {
-      showAuthError('login', 'Confirme seu e-mail antes de entrar. Verifique sua caixa de entrada.');
-      return;
-    }
-
-    currentUser = data.user;
-    await resolveUserRole();
-
-  } finally {
+  // Se deu erro, restaura o botão e mostra a mensagem
+  if (error) {
     btn.textContent = 'Entrar →';
     btn.disabled = false;
+    return showAuthError('login', traduzirErroAuth(error.message));
   }
+
+  if (!data.session) {
+    btn.textContent = 'Entrar →';
+    btn.disabled = false;
+    return showAuthError('login', 'Confirme seu e-mail antes de entrar. Verifique sua caixa de entrada.');
+  }
+
+  // Login OK — esconde a tela imediatamente e carrega o app
+  document.getElementById('auth-screen').classList.add('hidden');
+  currentUser = data.user;
+  await resolveUserRole();
 }
 
 // Traduz mensagens de erro do Supabase para português
