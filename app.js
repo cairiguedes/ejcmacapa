@@ -214,6 +214,7 @@ function watchPendingProfile() {
       // ORDEM CRÍTICA: Primeiro limpa as telas de erro/pendência, depois lança o app
       hideAllScreens(); 
       document.getElementById('pending-screen').classList.add('hidden');
+      document.getElementById('app').classList.remove('hidden');
       
       showToast('✅ Acesso aprovado! Entrando...', 'success');
       await launchApp();
