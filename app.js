@@ -182,60 +182,84 @@ async function resolveUserRole() {
   await launchApp();
 }
 
-// Polling do perfil pendente — verifica a cada 5s se foi aprovado.
-// Mais confiável que Realtime filtrado, que depende de REPLICA IDENTITY FULL
-// estar configurado E de policies específicas para funcionar.
+// Polling do perfil pendente — verifica a cada 4s se foi aprovado.
 let pendingWatcher = null;
 
 function watchPendingProfile() {
   if (pendingWatcher) { clearInterval(pendingWatcher); pendingWatcher = null; }
 
-  pendingWatcher = setInterval(async () => {
+  // Faz uma verificação imediata e depois a cada 4 segundos
+  const checkRole = async () => {
     if (!currentUser) { clearInterval(pendingWatcher); return; }
 
-    // Força a busca sem cache do Supabase
-    const { data: profile, error } = await sb
-      .from('profiles')
-      .select('*')
-      .eq('id', currentUser.id)
-      .single();
+    try {
+      // Garante que a sessão está ativa antes de consultar
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) { clearInterval(pendingWatcher); return; }
 
-    if (error || !profile) return;
+      const { data: profile, error } = await sb
+        .from('profiles')
+        .select('role, name, username')
+        .eq('id', currentUser.id)
+        .single();
 
-    // Log para você testar no console (F12) se o status está mudando mesmo
-    console.log("Checando status atual:", profile.role);
+      if (error) {
+        console.warn('Polling erro (ignorado):', error.message);
+        return;
+      }
 
-    if (profile.role === 'admin' || profile.role === 'superadmin') {
-      clearInterval(pendingWatcher);
-      pendingWatcher = null;
-      
-      currentProfile = profile; 
-      
-      // ORDEM CRÍTICA: Primeiro limpa as telas de erro/pendência, depois lança o app
-      hideAllScreens(); 
-      document.getElementById('pending-screen').classList.add('hidden');
-      document.getElementById('app').classList.remove('hidden');
-      
-      showToast('✅ Acesso aprovado! Entrando...', 'success');
-      await launchApp();
+      if (!profile) return;
 
-    } else if (profile.role === 'blocked') {
-      clearInterval(pendingWatcher);
-      pendingWatcher = null;
-      await sb.auth.signOut();
-      showAuthScreen();
-      showAuthError('login', 'Seu acesso foi bloqueado.');
+      const role = profile.role;
+      console.log('Polling: role atual =', role); // diagnóstico
+
+      if (role === 'admin' || role === 'superadmin') {
+        clearInterval(pendingWatcher);
+        pendingWatcher = null;
+
+        // Carrega perfil completo
+        const { data: fullProfile } = await sb
+          .from('profiles').select('*').eq('id', currentUser.id).single();
+        currentProfile = fullProfile || { ...profile, id: currentUser.id, email: currentUser.email };
+
+        showToast('✅ Acesso aprovado! Bem-vindo(a)!', 'success');
+        await launchApp();
+
+      } else if (role === 'blocked') {
+        clearInterval(pendingWatcher);
+        pendingWatcher = null;
+        await sb.auth.signOut();
+        currentUser = null; currentProfile = null;
+        showAuthScreen();
+        showAuthError('login', 'Seu acesso foi bloqueado pelo administrador.');
+      }
+      // 'pending' → continua aguardando
+    } catch(e) {
+      console.warn('Polling exceção:', e);
     }
-  }, 4000); // 4 segundos para ser mais rápido
+  };
+
+  // Verifica imediatamente na primeira vez, depois a cada 4s
+  checkRole();
+  pendingWatcher = setInterval(checkRole, 4000);
 }
+
 // ─── LANÇAR O APP ───────────────────────────────────
 async function launchApp() {
+  // Esconde tudo primeiro para evitar flicker
+  hideAllScreens();
+
   await Promise.all([loadTeams(), loadEntries(), loadGincanas(), loadProfiles()]);
   applyRoleUI();
   renderAll();
   subscribeRealtime();
-  hideSplash();
-  hideAllScreens();
+
+  // Esconde splash (caso ainda esteja visível)
+  const splash = document.getElementById('splash');
+  splash.classList.add('fade-out');
+  setTimeout(() => splash.classList.add('hidden'), 550);
+
+  // Mostra o app
   document.getElementById('app').classList.remove('hidden');
 }
 
@@ -293,10 +317,42 @@ async function doLogin() {
   clearAuthErrors();
   if (!email || !pass) return showAuthError('login', 'Preencha e-mail e senha.');
 
-  const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
-  if (error) return showAuthError('login', error.message || 'E-mail ou senha inválidos.');
-  currentUser = data.user;
-  await resolveUserRole();
+  // Feedback visual enquanto processa
+  const btn = document.getElementById('btn-login');
+  btn.textContent = 'Entrando...';
+  btn.disabled = true;
+
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+
+    if (error) {
+      showAuthError('login', traduzirErroAuth(error.message));
+      return;
+    }
+
+    // Se o Supabase exige confirmação de e-mail, session vem null
+    if (!data.session) {
+      showAuthError('login', 'Confirme seu e-mail antes de entrar. Verifique sua caixa de entrada.');
+      return;
+    }
+
+    currentUser = data.user;
+    await resolveUserRole();
+
+  } finally {
+    btn.textContent = 'Entrar →';
+    btn.disabled = false;
+  }
+}
+
+// Traduz mensagens de erro do Supabase para português
+function traduzirErroAuth(msg) {
+  if (!msg) return 'Erro desconhecido.';
+  if (msg.includes('Invalid login')) return 'E-mail ou senha incorretos.';
+  if (msg.includes('Email not confirmed')) return 'Confirme seu e-mail antes de entrar.';
+  if (msg.includes('Too many requests')) return 'Muitas tentativas. Aguarde alguns minutos.';
+  if (msg.includes('User not found')) return 'Usuário não encontrado.';
+  return msg;
 }
 
 async function doRegister() {
