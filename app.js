@@ -16,7 +16,8 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 let teams    = [];
 let entries  = [];
 let gincanas = [];
-let profiles = [];   // todos os perfis (para o painel admin)
+let profiles = [];
+let events   = [];   // { id, title, description, event_date, location, created_by }
 
 let currentUser    = null;  // objeto do Supabase Auth
 let currentProfile = null;  // { id, email, name, username, role }
@@ -246,20 +247,14 @@ function watchPendingProfile() {
 
 // ─── LANÇAR O APP ───────────────────────────────────
 async function launchApp() {
-  // Esconde tudo primeiro para evitar flicker
   hideAllScreens();
-
-  await Promise.all([loadTeams(), loadEntries(), loadGincanas(), loadProfiles()]);
+  await Promise.all([loadTeams(), loadEntries(), loadGincanas(), loadProfiles(), loadEvents()]);
   applyRoleUI();
   renderAll();
   subscribeRealtime();
-
-  // Esconde splash (caso ainda esteja visível)
   const splash = document.getElementById('splash');
   splash.classList.add('fade-out');
   setTimeout(() => splash.classList.add('hidden'), 550);
-
-  // Mostra o app
   document.getElementById('app').classList.remove('hidden');
 }
 
@@ -414,12 +409,12 @@ function doGuestAccess() {
 }
 
 async function boot_guest() {
-  await Promise.all([loadTeams(), loadEntries(), loadGincanas()]);
+  await Promise.all([loadTeams(), loadEntries(), loadGincanas(), loadEvents()]);
   applyRoleUI();
   renderAll();
   subscribeRealtime();
-  hideSplash();           // ← estava faltando
-  hideAllScreens();       // fecha tela de login/pendente
+  hideSplash();
+  hideAllScreens();
   document.getElementById('app').classList.remove('hidden');
 }
 
@@ -511,12 +506,18 @@ async function loadGincanas() {
   if (error) return { error };
   gincanas = data || [];
 }
+async function loadEvents() {
+  const { data, error } = await sb.from('events').select('*').order('event_date', { ascending: true });
+  if (error) return { error };
+  events = data || [];
+}
 
 function subscribeRealtime() {
   sb.channel('ejc-realtime')
     .on('postgres_changes', { event:'*', schema:'public', table:'teams' },    async () => { await loadTeams();    renderAll(); })
     .on('postgres_changes', { event:'*', schema:'public', table:'entries' },  async () => { await loadEntries();  renderAll(); })
     .on('postgres_changes', { event:'*', schema:'public', table:'gincanas' }, async () => { await loadGincanas(); renderAll(); })
+    .on('postgres_changes', { event:'*', schema:'public', table:'events' },   async () => { await loadEvents();   renderCalendar(); })
     .on('postgres_changes', { event:'*', schema:'public', table:'profiles' }, async () => { await loadProfiles(); renderAdminPanel(); })
     .subscribe();
 }
@@ -554,6 +555,7 @@ function renderAll() {
   renderHome();
   renderRanking();
   renderHistory();
+  renderCalendar();
   renderEquipesTab();
   renderGincanasTab();
   renderCalcTab();
@@ -573,7 +575,7 @@ function updateGlobalFilterUI() {
 
 function toggleFilterBarVisibility(tabName) {
   const bar=document.getElementById('global-filter-bar');
-  const hiddenTabs=['equipes','gincanas','calc','adminpanel','report'];
+  const hiddenTabs=['equipes','gincanas','calc','adminpanel','report','calendar'];
   bar.classList.toggle('hidden-filter', hiddenTabs.includes(tabName));
 }
 
@@ -804,6 +806,201 @@ async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}){
   if(error){console.error(error);showToast('Erro: '+error.message,'error');}
 }
 
+// ════════════════════════════════════════════════════
+//   CALENDÁRIO / AGENDA DE EVENTOS
+// ════════════════════════════════════════════════════
+
+function renderCalendar() {
+  const list  = document.getElementById('calendar-list');
+  const label = document.getElementById('cal-next-label');
+  if (!list) return;
+
+  const now = new Date();
+  const todayStr = today();
+
+  // Ordena: futuros primeiro (asc), passados depois (desc)
+  const upcoming = events
+    .filter(e => e.event_date && new Date(e.event_date) >= now)
+    .sort((a,b) => new Date(a.event_date) - new Date(b.event_date));
+
+  const past = events
+    .filter(e => !e.event_date || new Date(e.event_date) < now)
+    .sort((a,b) => new Date(b.event_date) - new Date(a.event_date));
+
+  const ordered = [...upcoming, ...past];
+
+  // Label do próximo evento
+  if (upcoming.length) {
+    const next = upcoming[0];
+    const diff = diffDays(now, new Date(next.event_date));
+    label.textContent = diff === 0
+      ? '🔴 Hoje!'
+      : `próximo em ${diff} dia${diff>1?'s':''}`;
+  } else {
+    label.textContent = '';
+  }
+
+  if (!ordered.length) {
+    list.innerHTML = `<div class="empty-state">
+      <span class="empty-icon">📅</span>
+      Nenhum evento cadastrado ainda.
+    </div>`;
+    return;
+  }
+
+  const isAdmin = canWrite();
+
+  list.innerHTML = ordered.map(ev => {
+    const evDate  = ev.event_date ? new Date(ev.event_date) : null;
+    const isPast  = evDate && evDate < now;
+    const diff    = evDate ? diffDays(now, evDate) : null;
+
+    const dayNum  = evDate ? String(evDate.getDate()).padStart(2,'0') : '??';
+    const monStr  = evDate ? evDate.toLocaleString('pt-BR', { month:'short' }).toUpperCase().replace('.','') : '???';
+    const timeStr = evDate ? evDate.toLocaleString('pt-BR', { hour:'2-digit', minute:'2-digit' }) : '';
+    const yearStr = evDate ? evDate.getFullYear() : '';
+
+    let urgencyBadge = '';
+    if (!isPast && diff !== null) {
+      if (diff === 0)      urgencyBadge = '<span class="ev-badge ev-today">HOJE</span>';
+      else if (diff <= 6)  urgencyBadge = `<span class="ev-badge ev-soon">Em ${diff}d</span>`;
+    }
+
+    return `<div class="cal-event-item ${isPast ? 'ev-past' : ''}" data-ev-id="${ev.id}">
+      <div class="cal-date-badge">
+        <div class="cal-day">${dayNum}</div>
+        <div class="cal-mon">${monStr}</div>
+        <div class="cal-year">${yearStr}</div>
+      </div>
+      <div class="cal-event-info">
+        <div class="cal-event-title">${escHtml(ev.title)} ${urgencyBadge}</div>
+        ${timeStr    ? `<div class="cal-event-meta">🕐 ${timeStr}</div>` : ''}
+        ${ev.location? `<div class="cal-event-meta">📍 ${escHtml(ev.location)}</div>` : ''}
+        ${ev.description ? `<div class="cal-event-desc">${escHtml(ev.description)}</div>` : ''}
+      </div>
+      ${isAdmin ? `<div class="entity-actions" style="flex-shrink:0;align-self:flex-start">
+        <button class="btn-edit"   data-edit-ev="${ev.id}">✏️</button>
+        <button class="btn-delete" data-del-ev="${ev.id}">🗑</button>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+
+  // Bind botões de admin
+  if (isAdmin) {
+    list.querySelectorAll('[data-edit-ev]').forEach(btn =>
+      btn.addEventListener('click', () => openEventModal(btn.dataset.editEv)));
+    list.querySelectorAll('[data-del-ev]').forEach(btn =>
+      btn.addEventListener('click', () => confirmDeleteEvent(btn.dataset.delEv)));
+  }
+}
+
+// Alerta in-app ao abrir a aba
+function calendarAlert() {
+  const now = new Date();
+  const upcoming = events
+    .filter(e => e.event_date && new Date(e.event_date) >= now)
+    .sort((a,b) => new Date(a.event_date) - new Date(b.event_date));
+
+  if (!upcoming.length) return;
+
+  const next = upcoming[0];
+  const diff = diffDays(now, new Date(next.event_date));
+
+  if (diff === 0) {
+    showToast(`🔴 HOJE tem evento: "${next.title}"!`, 'error');
+  } else if (diff <= 6) {
+    showToast(`📅 "${next.title}" em ${diff} dia${diff>1?'s':''}!`, 'info');
+  }
+}
+
+// Diferença em dias inteiros entre duas datas
+function diffDays(from, to) {
+  const msDay = 1000 * 60 * 60 * 24;
+  return Math.max(0, Math.floor((to - from) / msDay));
+}
+
+// ── Modal de evento ────────────────────────────────
+function openEventModal(editId) {
+  if (!requireAdmin()) return;
+  const input = document.getElementById('event-editing-id');
+  const titleEl = document.getElementById('modal-event-title');
+
+  // Limpa campos
+  document.getElementById('event-title').value       = '';
+  document.getElementById('event-datetime').value    = '';
+  document.getElementById('event-location').value    = '';
+  document.getElementById('event-description').value = '';
+  input.value = '';
+
+  if (editId) {
+    const ev = events.find(e => e.id === editId);
+    if (!ev) return;
+    input.value = editId;
+    document.getElementById('event-title').value       = ev.title || '';
+    // Converte UTC para local para o input datetime-local
+    if (ev.event_date) {
+      const local = new Date(ev.event_date);
+      const offset = local.getTimezoneOffset();
+      const adjusted = new Date(local.getTime() - offset * 60000);
+      document.getElementById('event-datetime').value = adjusted.toISOString().slice(0,16);
+    }
+    document.getElementById('event-location').value    = ev.location    || '';
+    document.getElementById('event-description').value = ev.description || '';
+    titleEl.textContent = '✏️ Editar Evento';
+  } else {
+    titleEl.textContent = '📅 Novo Evento';
+  }
+
+  openModal('modal-event');
+}
+
+async function saveEvent() {
+  if (!requireAdmin()) return;
+  const editId   = document.getElementById('event-editing-id').value;
+  const title    = document.getElementById('event-title').value.trim();
+  const datetime = document.getElementById('event-datetime').value;
+  const location = document.getElementById('event-location').value.trim();
+  const desc     = document.getElementById('event-description').value.trim();
+
+  if (!title)    return showToast('Digite o nome do evento!', 'error');
+  if (!datetime) return showToast('Informe a data e hora!', 'error');
+
+  const payload = {
+    title,
+    event_date:  new Date(datetime).toISOString(),
+    location:    location || null,
+    description: desc     || null,
+    created_by:  currentProfile?.username || currentProfile?.name || currentProfile?.email || null
+  };
+
+  if (editId) {
+    const { error } = await sb.from('events').update(payload).eq('id', editId);
+    if (error) return showToast('Erro: ' + error.message, 'error');
+    showToast('Evento atualizado! ✅', 'success');
+  } else {
+    const { error } = await sb.from('events').insert(payload);
+    if (error) return showToast('Erro: ' + error.message, 'error');
+    showToast('Evento criado! 📅', 'success');
+  }
+
+  closeModal('modal-event');
+}
+
+function confirmDeleteEvent(id) {
+  if (!requireAdmin()) return;
+  const ev = events.find(e => e.id === id);
+  if (!ev) return;
+  document.getElementById('confirm-title').textContent = 'Excluir Evento';
+  document.getElementById('confirm-message').innerHTML =
+    `Excluir o evento <strong>${escHtml(ev.title)}</strong>?<br><br>⚠️ Ação não pode ser desfeita.`;
+  confirmCallback = async () => {
+    const { error } = await sb.from('events').delete().eq('id', id);
+    if (error) return showToast('Erro: ' + error.message, 'error');
+    showToast('Evento excluído.', 'info');
+  };
+  openModal('modal-confirm');
+}
+
 // ─── SELECTS ─────────────────────────────────────────
 function populateSelects(){const teamOpts=teams.length?teams.map(t=>`<option value="${t.id}">${escHtml(t.name)}</option>`).join(''):'<option disabled>Nenhuma equipe</option>';const ginOpts=gincanas.map(g=>`<option value="${g.id}">${escHtml(g.name)}</option>`).join('');function rebuild(id,prefix,extra){const sel=document.getElementById(id),cur=sel.value;sel.innerHTML=prefix+extra;if(cur&&sel.querySelector(`option[value="${cur}"]`))sel.value=cur;}rebuild('score-team','<option value="">— selecione a equipe —</option>',teamOpts);rebuild('pun-team','<option value="">— selecione a equipe —</option>',teamOpts);rebuild('score-gin','<option value="">— nenhuma —</option>',ginOpts);}
 
@@ -862,8 +1059,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const name = tab.dataset.tab;
       document.getElementById('tab-'+name).classList.remove('hidden');
       toggleFilterBarVisibility(name);
-      if(name==='charts') renderCharts();
-      if(name==='report') renderReport();
+      if(name==='charts')   renderCharts();
+      if(name==='report')   renderReport();
+      if(name==='calendar') { renderCalendar(); calendarAlert(); }
     });
   });
 
@@ -1001,6 +1199,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('report-period-select').addEventListener('change', renderReport);
   document.getElementById('btn-export-img').addEventListener('click', exportImage);
   document.getElementById('btn-export-pdf').addEventListener('click', exportPDF);
+
+  // ── Calendário ──
+  document.getElementById('fab-new-event')?.addEventListener('click', () => openEventModal(null));
+  document.getElementById('btn-save-event').addEventListener('click', saveEvent);
 
   // ── History search ──
   document.getElementById('history-search').addEventListener('input', e=>{historyFilter=e.target.value;renderHistory();});
