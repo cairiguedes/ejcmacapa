@@ -970,7 +970,7 @@ async function saveEvent() {
     event_date:  new Date(datetime).toISOString(),
     location:    location || null,
     description: desc     || null,
-    created_by:  currentProfile?.username || currentProfile?.name || currentProfile?.email || null
+    created_by:  currentProfile?.id || null   // UUID, não o nome
   };
 
   if (editId) {
