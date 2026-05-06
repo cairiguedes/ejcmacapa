@@ -19,6 +19,9 @@ let gincanas = [];
 let profiles = [];
 let events   = [];   // { id, title, description, event_date, location, created_by }
 
+// Filtro de mês da agenda: { year, month } — null = todos
+let calFilterMonth = null;
+
 let currentUser    = null;  // objeto do Supabase Auth
 let currentProfile = null;  // { id, email, name, username, role }
 let isGuest        = false; // visitante sem login
@@ -585,6 +588,13 @@ function renderHome() {
   const filtered = getFilteredEntries();
   document.getElementById('home-entries-label').textContent = filtered.length ? `${filtered.length} lançamento${filtered.length>1?'s':''}` : '';
   renderTop3(calcRanking(filtered));
+
+  // Alerta de evento próximo na Home (só uma vez por sessão)
+  if (!renderHome._alerted && events.length) {
+    renderHome._alerted = true;
+    setTimeout(calendarAlert, 1500); // delay para o app terminar de carregar
+  }
+
   const sorted = [...filtered].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
   const list=document.getElementById('today-list');
   if(!sorted.length) { list.innerHTML=`<div class="empty-state"><span class="empty-icon">🎯</span>Nenhum lançamento neste período.</div>`; return; }
@@ -810,28 +820,95 @@ async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}){
 //   CALENDÁRIO / AGENDA DE EVENTOS
 // ════════════════════════════════════════════════════
 
+// Monta a lista de meses disponíveis baseado nos eventos cadastrados
+function getEventMonths() {
+  const seen = new Set();
+  const now = new Date();
+  const months = [];
+
+  // Sempre inclui o mês atual e o próximo, mesmo sem eventos
+  for (let i = 0; i <= 2; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      months.push({ year: d.getFullYear(), month: d.getMonth() });
+    }
+  }
+
+  // Adiciona meses de eventos existentes
+  events.forEach(ev => {
+    if (!ev.event_date) return;
+    const d = new Date(ev.event_date);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      months.push({ year: d.getFullYear(), month: d.getMonth() });
+    }
+  });
+
+  return months.sort((a,b) => a.year !== b.year ? a.year-b.year : a.month-b.month);
+}
+
+function monthLabel(year, month) {
+  const d = new Date(year, month, 1);
+  return d.toLocaleString('pt-BR', { month: 'long', year: 'numeric' })
+          .replace(/^\w/, c => c.toUpperCase());
+}
+
 function renderCalendar() {
   const list  = document.getElementById('calendar-list');
   const label = document.getElementById('cal-next-label');
+  const nav   = document.getElementById('cal-month-nav');
   if (!list) return;
 
   const now = new Date();
-  const todayStr = today();
 
-  // Ordena: futuros primeiro (asc), passados depois (desc)
-  const upcoming = events
+  // Inicializa filtro no mês atual se null
+  if (!calFilterMonth) {
+    calFilterMonth = { year: now.getFullYear(), month: now.getMonth() };
+  }
+
+  // Renderiza navegação de meses
+  if (nav) {
+    const months = getEventMonths();
+    nav.innerHTML = months.map(m => {
+      const active = m.year === calFilterMonth.year && m.month === calFilterMonth.month;
+      return `<button class="cal-month-chip ${active ? 'active' : ''}"
+        data-cy="${m.year}" data-cm="${m.month}">
+        ${monthLabel(m.year, m.month)}
+      </button>`;
+    }).join('');
+
+    nav.querySelectorAll('.cal-month-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        calFilterMonth = { year: Number(btn.dataset.cy), month: Number(btn.dataset.cm) };
+        renderCalendar();
+      });
+    });
+  }
+
+  // Filtra eventos pelo mês selecionado
+  const filtered = events.filter(ev => {
+    if (!ev.event_date) return false;
+    const d = new Date(ev.event_date);
+    return d.getFullYear() === calFilterMonth.year && d.getMonth() === calFilterMonth.month;
+  });
+
+  // Ordena: futuros primeiro, passados depois
+  const upcoming = filtered.filter(e => new Date(e.event_date) >= now)
+    .sort((a,b) => new Date(a.event_date) - new Date(b.event_date));
+  const past = filtered.filter(e => new Date(e.event_date) < now)
+    .sort((a,b) => new Date(b.event_date) - new Date(a.event_date));
+  const ordered = [...upcoming, ...past];
+
+  // Label do próximo evento (global, não filtrado)
+  const allUpcoming = events
     .filter(e => e.event_date && new Date(e.event_date) >= now)
     .sort((a,b) => new Date(a.event_date) - new Date(b.event_date));
 
-  const past = events
-    .filter(e => !e.event_date || new Date(e.event_date) < now)
-    .sort((a,b) => new Date(b.event_date) - new Date(a.event_date));
-
-  const ordered = [...upcoming, ...past];
-
-  // Label do próximo evento
-  if (upcoming.length) {
-    const next = upcoming[0];
+  if (allUpcoming.length) {
+    const next = allUpcoming[0];
     const diff = diffDays(now, new Date(next.event_date));
     label.textContent = diff === 0
       ? '🔴 Hoje!'
@@ -843,7 +920,7 @@ function renderCalendar() {
   if (!ordered.length) {
     list.innerHTML = `<div class="empty-state">
       <span class="empty-icon">📅</span>
-      Nenhum evento cadastrado ainda.
+      Nenhum evento em ${monthLabel(calFilterMonth.year, calFilterMonth.month)}.
     </div>`;
     return;
   }
@@ -851,22 +928,22 @@ function renderCalendar() {
   const isAdmin = canWrite();
 
   list.innerHTML = ordered.map(ev => {
-    const evDate  = ev.event_date ? new Date(ev.event_date) : null;
-    const isPast  = evDate && evDate < now;
-    const diff    = evDate ? diffDays(now, evDate) : null;
+    const evDate  = new Date(ev.event_date);
+    const isPast  = evDate < now;
+    const diff    = diffDays(now, evDate);
 
-    const dayNum  = evDate ? String(evDate.getDate()).padStart(2,'0') : '??';
-    const monStr  = evDate ? evDate.toLocaleString('pt-BR', { month:'short' }).toUpperCase().replace('.','') : '???';
-    const timeStr = evDate ? evDate.toLocaleString('pt-BR', { hour:'2-digit', minute:'2-digit' }) : '';
-    const yearStr = evDate ? evDate.getFullYear() : '';
+    const dayNum  = String(evDate.getDate()).padStart(2,'0');
+    const monStr  = evDate.toLocaleString('pt-BR', { month:'short' }).toUpperCase().replace('.','');
+    const timeStr = evDate.toLocaleString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+    const yearStr = evDate.getFullYear();
 
     let urgencyBadge = '';
-    if (!isPast && diff !== null) {
-      if (diff === 0)      urgencyBadge = '<span class="ev-badge ev-today">HOJE</span>';
-      else if (diff <= 6)  urgencyBadge = `<span class="ev-badge ev-soon">Em ${diff}d</span>`;
+    if (!isPast) {
+      if (diff === 0)     urgencyBadge = '<span class="ev-badge ev-today">HOJE</span>';
+      else if (diff <= 6) urgencyBadge = `<span class="ev-badge ev-soon">Em ${diff}d</span>`;
     }
 
-    return `<div class="cal-event-item ${isPast ? 'ev-past' : ''}" data-ev-id="${ev.id}">
+    return `<div class="cal-event-item ${isPast ? 'ev-past' : ''}">
       <div class="cal-date-badge">
         <div class="cal-day">${dayNum}</div>
         <div class="cal-mon">${monStr}</div>
@@ -885,7 +962,6 @@ function renderCalendar() {
     </div>`;
   }).join('');
 
-  // Bind botões de admin
   if (isAdmin) {
     list.querySelectorAll('[data-edit-ev]').forEach(btn =>
       btn.addEventListener('click', () => openEventModal(btn.dataset.editEv)));
