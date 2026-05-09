@@ -685,15 +685,40 @@ function renderHistory() {
 
 // ─── RELATÓRIO / EXPORTAÇÃO ──────────────────────────
 function renderReport() {
-  const period = document.getElementById('report-period-select')?.value || 'week';
+  const period  = document.getElementById('report-period-select')?.value || 'week';
+  const customRange = document.getElementById('report-custom-range');
+
+  // Mostra/oculta os campos de data personalizada
+  if (customRange) {
+    customRange.classList.toggle('hidden', period !== 'custom');
+  }
+
   let start, end, label;
   switch(period) {
-    case 'today': start=end=today(); label='Hoje — '+fmtDate(today()); break;
-    case 'week':  { const w=getWeekRange();  start=w.start; end=w.end; label=`Semana: ${fmtDate(w.start)} – ${fmtDate(w.end)}`; break; }
-    case 'month': { const m=getMonthRange(); start=m.start; end=m.end; const n=new Date(); label=`${n.toLocaleString('pt-BR',{month:'long'})} ${n.getFullYear()}`; break; }
-    case 'year':  { const y=getYearRange();  start=y.start; end=y.end; label=`Ano ${new Date().getFullYear()}`; break; }
-    case 'all':   start=null; end=null; label='Todo o histórico'; break;
+    case 'today':  start=end=today(); label='Hoje — '+fmtDate(today()); break;
+    case 'week':   { const w=getWeekRange();  start=w.start; end=w.end; label=`Semana: ${fmtDate(w.start)} – ${fmtDate(w.end)}`; break; }
+    case 'month':  { const m=getMonthRange(); start=m.start; end=m.end; const n=new Date(); label=`${n.toLocaleString('pt-BR',{month:'long'})} ${n.getFullYear()}`; break; }
+    case 'year':   { const y=getYearRange();  start=y.start; end=y.end; label=`Ano ${new Date().getFullYear()}`; break; }
+    case 'all':    start=null; end=null; label='Todo o histórico'; break;
+    case 'custom': {
+      const from = document.getElementById('report-date-from')?.value;
+      const to   = document.getElementById('report-date-to')?.value;
+      if (!from || !to) {
+        // Ainda não aplicou — mostra o card vazio com instrução
+        document.getElementById('report-period-label').textContent = 'Selecione as datas e clique em Aplicar';
+        document.getElementById('report-date-gen').textContent = new Date().toLocaleString('pt-BR');
+        document.getElementById('report-ranking-list').innerHTML =
+          `<div style="text-align:center;padding:1.5rem 0;color:var(--muted);font-size:.88rem">
+            ✂️ Escolha as datas acima e clique em <strong>Aplicar Período</strong>
+          </div>`;
+        return;
+      }
+      start = from; end = to;
+      label = `${fmtDate(from)} → ${fmtDate(to)}`;
+      break;
+    }
   }
+
   const filtered = start ? entries.filter(e=>(e.data_entry||'')>=start&&(e.data_entry||'')<=end) : entries;
   const ranking  = calcRanking(filtered);
   const posClass = i=>['gold','silver','bronze'][i]||'normal';
@@ -1275,6 +1300,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('report-period-select').addEventListener('change', renderReport);
   document.getElementById('btn-export-img').addEventListener('click', exportImage);
   document.getElementById('btn-export-pdf').addEventListener('click', exportPDF);
+  document.getElementById('btn-report-custom-apply')?.addEventListener('click', () => {
+    const from = document.getElementById('report-date-from').value;
+    const to   = document.getElementById('report-date-to').value;
+    if (!from || !to) return showToast('Preencha as duas datas!', 'error');
+    if (from > to)    return showToast('A data inicial deve ser anterior à final!', 'error');
+    renderReport();
+  });
 
   // ── Calendário ──
   document.getElementById('fab-new-event')?.addEventListener('click', () => openEventModal(null));

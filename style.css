@@ -362,6 +362,16 @@ body {
    RELATÓRIO / EXPORTAÇÃO
 ════════════════════════════════════════ */
 .report-controls { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:1rem; margin-bottom:1rem; display:flex; flex-direction:column; gap:.75rem; }
+
+.report-custom-range {
+  display: flex; flex-direction: column; gap: .6rem;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .75rem;
+  animation: fadeIn .2s ease;
+}
+.report-custom-row { display: flex; gap: .65rem; }
 .report-btn-row { display:flex; gap:.6rem; }
 .btn-report {
   flex:1; background:linear-gradient(135deg,var(--accent),#9333ea);

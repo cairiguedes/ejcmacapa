@@ -249,8 +249,26 @@
           <option value="month">Este Mês</option>
           <option value="year">Este Ano</option>
           <option value="all">Todo o Histórico</option>
+          <option value="custom">✂️ Período Personalizado</option>
         </select>
       </div>
+
+      <!-- Aparece só quando "Período Personalizado" for selecionado -->
+      <div id="report-custom-range" class="report-custom-range hidden">
+        <div class="report-custom-row">
+          <div class="form-field" style="flex:1">
+            <label>De</label>
+            <input id="report-date-from" type="date" />
+          </div>
+          <div class="form-field" style="flex:1">
+            <label>Até</label>
+            <input id="report-date-to" type="date" />
+          </div>
+        </div>
+        <button class="btn-primary full" id="btn-report-custom-apply"
+          style="margin-top:.1rem">Aplicar Período</button>
+      </div>
+
       <div class="report-btn-row">
         <button class="btn-report" id="btn-export-img">📸 Salvar Imagem</button>
         <button class="btn-report btn-report-pdf" id="btn-export-pdf">📄 Salvar PDF</button>
