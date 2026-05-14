@@ -241,6 +241,25 @@
   <!-- ══════ RELATÓRIO ══════ -->
   <section id="tab-report" class="tab-content hidden">
     <div class="report-controls">
+
+      <!-- Tipo de conteúdo -->
+      <div class="form-field">
+        <label>Conteúdo do relatório</label>
+        <div class="report-content-toggle">
+          <button class="report-type-btn active" data-rtype="ranking">
+            🏆 Só Ranking
+          </button>
+          <button class="report-type-btn" data-rtype="history">
+            📋 Só Histórico
+          </button>
+          <button class="report-type-btn" data-rtype="both">
+            📊 Completo
+          </button>
+        </div>
+        <input type="hidden" id="report-content-type" value="ranking" />
+      </div>
+
+      <!-- Período -->
       <div class="form-field">
         <label>Período do relatório</label>
         <select id="report-period-select">
@@ -285,7 +304,19 @@
         </div>
       </div>
       <div id="report-period-label" class="report-period"></div>
-      <div id="report-ranking-list" class="report-ranking"></div>
+
+      <!-- Seção ranking -->
+      <div id="report-ranking-section">
+        <div class="report-section-title">🏆 RANKING</div>
+        <div id="report-ranking-list" class="report-ranking"></div>
+      </div>
+
+      <!-- Seção histórico -->
+      <div id="report-history-section" class="hidden">
+        <div class="report-section-title" style="margin-top:.85rem">📋 HISTÓRICO</div>
+        <div id="report-history-list" class="report-history"></div>
+      </div>
+
       <div class="report-footer">
         Gerado em <span id="report-date-gen"></span>
       </div>

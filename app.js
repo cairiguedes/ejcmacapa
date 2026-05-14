@@ -685,14 +685,13 @@ function renderHistory() {
 
 // ─── RELATÓRIO / EXPORTAÇÃO ──────────────────────────
 function renderReport() {
-  const period  = document.getElementById('report-period-select')?.value || 'week';
+  const period      = document.getElementById('report-period-select')?.value || 'week';
+  const contentType = document.getElementById('report-content-type')?.value  || 'ranking';
   const customRange = document.getElementById('report-custom-range');
 
-  // Mostra/oculta os campos de data personalizada
-  if (customRange) {
-    customRange.classList.toggle('hidden', period !== 'custom');
-  }
+  customRange?.classList.toggle('hidden', period !== 'custom');
 
+  // ── Resolve intervalo de datas ──
   let start, end, label;
   switch(period) {
     case 'today':  start=end=today(); label='Hoje — '+fmtDate(today()); break;
@@ -704,35 +703,77 @@ function renderReport() {
       const from = document.getElementById('report-date-from')?.value;
       const to   = document.getElementById('report-date-to')?.value;
       if (!from || !to) {
-        // Ainda não aplicou — mostra o card vazio com instrução
         document.getElementById('report-period-label').textContent = 'Selecione as datas e clique em Aplicar';
         document.getElementById('report-date-gen').textContent = new Date().toLocaleString('pt-BR');
         document.getElementById('report-ranking-list').innerHTML =
-          `<div style="text-align:center;padding:1.5rem 0;color:var(--muted);font-size:.88rem">
-            ✂️ Escolha as datas acima e clique em <strong>Aplicar Período</strong>
-          </div>`;
+          `<div style="text-align:center;padding:1.5rem 0;color:rgba(240,230,255,.5);font-size:.85rem">
+             ✂️ Escolha as datas acima e clique em <strong>Aplicar Período</strong>
+           </div>`;
+        document.getElementById('report-history-list').innerHTML = '';
         return;
       }
-      start = from; end = to;
-      label = `${fmtDate(from)} → ${fmtDate(to)}`;
+      start=from; end=to; label=`${fmtDate(from)} → ${fmtDate(to)}`;
       break;
     }
   }
 
-  const filtered = start ? entries.filter(e=>(e.data_entry||'')>=start&&(e.data_entry||'')<=end) : entries;
-  const ranking  = calcRanking(filtered);
-  const posClass = i=>['gold','silver','bronze'][i]||'normal';
-  const medals   = ['🥇','🥈','🥉'];
+  const filtered = start
+    ? entries.filter(e => (e.data_entry||'') >= start && (e.data_entry||'') <= end)
+    : entries;
+
+  // ── Visibilidade das seções conforme tipo escolhido ──
+  const showRanking = contentType === 'ranking' || contentType === 'both';
+  const showHistory = contentType === 'history' || contentType === 'both';
+  document.getElementById('report-ranking-section').classList.toggle('hidden', !showRanking);
+  document.getElementById('report-history-section').classList.toggle('hidden', !showHistory);
 
   document.getElementById('report-period-label').textContent = label;
   document.getElementById('report-date-gen').textContent = new Date().toLocaleString('pt-BR');
-  document.getElementById('report-ranking-list').innerHTML = ranking.map((t,i)=>`
-    <div class="report-rank-item ${i<3?'rr-'+(i+1):''}">
-      <span class="rr-pos ${posClass(i)}">${medals[i]||i+1+'º'}</span>
-      <span class="rr-dot" style="background:${t.color}"></span>
-      <span class="rr-name">${escHtml(t.name)}</span>
-      <span class="rr-pts ${t.pts<0?'negative':''}">${t.pts>0?'+':''}${t.pts}</span>
-    </div>`).join('');
+
+  // ── Renderiza RANKING ──
+  if (showRanking) {
+    const ranking  = calcRanking(filtered);
+    const posClass = i => ['gold','silver','bronze'][i] || 'normal';
+    const medals   = ['🥇','🥈','🥉'];
+    document.getElementById('report-ranking-list').innerHTML = ranking.map((t,i) => `
+      <div class="report-rank-item ${i<3?'rr-'+(i+1):''}">
+        <span class="rr-pos ${posClass(i)}">${medals[i]||i+1+'º'}</span>
+        <span class="rr-dot" style="background:${t.color}"></span>
+        <span class="rr-name">${escHtml(t.name)}</span>
+        <span class="rr-pts ${t.pts<0?'negative':''}">${t.pts>0?'+':''}${t.pts}</span>
+      </div>`).join('');
+  }
+
+  // ── Renderiza HISTÓRICO ──
+  if (showHistory) {
+    const sorted = [...filtered].sort((a,b) => {
+      const dc = (b.data_entry||'').localeCompare(a.data_entry||'');
+      return dc !== 0 ? dc : new Date(b.created_at||0) - new Date(a.created_at||0);
+    });
+
+    if (!sorted.length) {
+      document.getElementById('report-history-list').innerHTML =
+        `<div style="text-align:center;padding:1rem 0;color:rgba(240,230,255,.4);font-size:.8rem">
+           Nenhum lançamento neste período.
+         </div>`;
+    } else {
+      document.getElementById('report-history-list').innerHTML = sorted.map(e => {
+        const neg  = e.points < 0;
+        const team = teamById(e.team_id);
+        const gin  = e.gin_id ? ginById(e.gin_id) : null;
+        const parts = (e.data_entry||'--').split('-');
+        const [y,m,d] = parts.length === 3 ? parts : ['?','?','?'];
+        return `<div class="report-history-item ${neg?'rh-punishment':''}">
+          <div class="rh-info">
+            <div class="rh-team">${escHtml(team?.name||'?')}${neg?' ⚠️':''}</div>
+            <div class="rh-meta">${d}/${m}/${y}${gin?' · 🎯 '+escHtml(gin.name):''}${e.launched_by_name?' · ✍️ '+escHtml(e.launched_by_name):''}</div>
+            ${e.descricao ? `<div class="rh-desc">${escHtml(e.descricao)}</div>` : ''}
+          </div>
+          <div class="rh-pts ${neg?'negative':''}">${e.points>0?'+':''}${e.points}</div>
+        </div>`;
+      }).join('');
+    }
+  }
 }
 
 async function exportImage() {
@@ -1297,6 +1338,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-save-edit-entry').addEventListener('click', saveEditEntry);
 
   // ── Relatório ──
+  document.querySelectorAll('.report-type-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.report-type-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('report-content-type').value = btn.dataset.rtype;
+      renderReport();
+    });
+  });
   document.getElementById('report-period-select').addEventListener('change', renderReport);
   document.getElementById('btn-export-img').addEventListener('click', exportImage);
   document.getElementById('btn-export-pdf').addEventListener('click', exportPDF);

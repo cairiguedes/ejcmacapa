@@ -363,6 +363,50 @@ body {
 ════════════════════════════════════════ */
 .report-controls { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:1rem; margin-bottom:1rem; display:flex; flex-direction:column; gap:.75rem; }
 
+/* Toggle de tipo de conteúdo */
+.report-content-toggle {
+  display: grid; grid-template-columns: repeat(3,1fr); gap: .4rem;
+}
+.report-type-btn {
+  background: var(--card2); border: 2px solid var(--border);
+  color: var(--muted); border-radius: var(--radius-sm);
+  padding: .55rem .3rem; font-family: 'Nunito', sans-serif;
+  font-size: .78rem; font-weight: 900;
+  cursor: pointer; text-align: center;
+  transition: background .2s, border-color .2s, color .2s;
+}
+.report-type-btn.active {
+  background: rgba(245,200,66,.12);
+  border-color: var(--gold); color: var(--gold);
+}
+
+/* Título de seção dentro do card capturado */
+.report-section-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: .95rem; letter-spacing: .08em;
+  color: var(--gold); margin-bottom: .5rem;
+  padding-bottom: .35rem;
+  border-bottom: 1px solid rgba(245,200,66,.2);
+}
+
+/* Histórico no relatório */
+.report-history { display: flex; flex-direction: column; gap: .35rem; }
+.report-history-item {
+  display: flex; align-items: center; gap: .6rem;
+  background: rgba(255,255,255,.03);
+  border-radius: 8px; padding: .45rem .6rem;
+}
+.report-history-item.rh-punishment {
+  background: rgba(239,68,68,.07);
+  border-left: 2px solid rgba(239,68,68,.5);
+}
+.rh-info  { flex: 1; min-width: 0; }
+.rh-team  { font-weight: 900; font-size: .8rem; color: #f0e6ff; }
+.rh-meta  { font-size: .65rem; color: rgba(167,139,181,.8); margin-top: .1rem; }
+.rh-desc  { font-size: .68rem; color: rgba(240,230,255,.55); }
+.rh-pts   { font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem; color: #22c55e; flex-shrink: 0; }
+.rh-pts.negative { color: #ef4444; }
+
 .report-custom-range {
   display: flex; flex-direction: column; gap: .6rem;
   background: var(--card2);
