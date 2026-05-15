@@ -563,6 +563,7 @@ function renderAll() {
   renderGincanasTab();
   renderCalcTab();
   renderReport();
+  populateReportTeamSelect();
   if (currentProfile?.role === 'superadmin') { renderAdminPanel(); populateMyProfile(); }
   populateSelects();
   if (!document.getElementById('tab-charts').classList.contains('hidden')) renderCharts();
@@ -1346,6 +1347,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderReport();
     });
   });
+  document.getElementById('report-team-select')?.addEventListener('change', renderReport);
   document.getElementById('report-period-select').addEventListener('change', renderReport);
   document.getElementById('btn-export-img').addEventListener('click', exportImage);
   document.getElementById('btn-export-pdf').addEventListener('click', exportPDF);

@@ -380,8 +380,22 @@ body {
   border-color: var(--gold); color: var(--gold);
 }
 
-/* Título de seção dentro do card capturado */
-.report-section-title {
+/* Badge de colocação no relatório de equipe específica */
+.report-placement-badge {
+  display: flex; align-items: center; gap: .75rem;
+  border-radius: var(--radius-sm);
+  padding: .7rem .9rem; margin-bottom: .65rem;
+  background: rgba(245,200,66,.1);
+  border: 1px solid rgba(245,200,66,.3);
+}
+.report-placement-badge.rp-pos-1 { background:rgba(245,200,66,.13); border-color:rgba(245,200,66,.4); }
+.report-placement-badge.rp-pos-2 { background:rgba(148,163,184,.08); border-color:rgba(148,163,184,.25); }
+.report-placement-badge.rp-pos-3 { background:rgba(180,83,9,.1);  border-color:rgba(180,83,9,.3); }
+.report-placement-badge.rp-pos-4 { background:rgba(167,139,181,.08); border-color:rgba(167,139,181,.2); }
+.rp-medal { font-size: 2rem; flex-shrink: 0; line-height: 1; }
+.rp-info  { display: flex; flex-direction: column; gap: .15rem; }
+.rp-team  { font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem; color: #f0e6ff; letter-spacing: .06em; }
+.rp-sub   { font-size: .7rem; color: rgba(167,139,181,.9); }
   font-family: 'Bebas Neue', sans-serif;
   font-size: .95rem; letter-spacing: .08em;
   color: var(--gold); margin-bottom: .5rem;
