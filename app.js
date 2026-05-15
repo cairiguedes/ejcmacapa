@@ -250,15 +250,25 @@ function watchPendingProfile() {
 
 // ─── LANÇAR O APP ───────────────────────────────────
 async function launchApp() {
+  // Reseta o flag do alerta para a nova sessão
+  renderHome._alerted = false;
+
+  // Esconde telas de auth imediatamente
   hideAllScreens();
+
+  // Esconde splash se ainda visível
+  const splash = document.getElementById('splash');
+  splash.classList.add('fade-out');
+  splash.classList.add('hidden'); // esconde imediatamente, sem esperar animação
+
+  // Mostra o app antes de carregar dados (evita tela roxa)
+  document.getElementById('app').classList.remove('hidden');
+
+  // Carrega dados e renderiza
   await Promise.all([loadTeams(), loadEntries(), loadGincanas(), loadProfiles(), loadEvents()]);
   applyRoleUI();
   renderAll();
   subscribeRealtime();
-  const splash = document.getElementById('splash');
-  splash.classList.add('fade-out');
-  setTimeout(() => splash.classList.add('hidden'), 550);
-  document.getElementById('app').classList.remove('hidden');
 }
 
 function applyRoleUI() {
@@ -397,6 +407,7 @@ function populateMyProfile() {
 
 async function doLogout() {
   if (pendingWatcher) { clearInterval(pendingWatcher); pendingWatcher = null; }
+  renderHome._alerted = false; // reseta alerta para próxima sessão
   await sb.auth.signOut();
   currentUser = null; currentProfile = null; isGuest = false;
   document.body.classList.remove('is-admin');
@@ -412,13 +423,18 @@ function doGuestAccess() {
 }
 
 async function boot_guest() {
+  renderHome._alerted = false;
+
+  hideAllScreens();
+  const splash = document.getElementById('splash');
+  splash.classList.add('fade-out');
+  splash.classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+
   await Promise.all([loadTeams(), loadEntries(), loadGincanas(), loadEvents()]);
   applyRoleUI();
   renderAll();
   subscribeRealtime();
-  hideSplash();
-  hideAllScreens();
-  document.getElementById('app').classList.remove('hidden');
 }
 
 // ─── ADMIN: gerenciar usuários ───────────────────────
@@ -590,10 +606,11 @@ function renderHome() {
   document.getElementById('home-entries-label').textContent = filtered.length ? `${filtered.length} lançamento${filtered.length>1?'s':''}` : '';
   renderTop3(calcRanking(filtered));
 
-  // Alerta de evento próximo na Home (só uma vez por sessão)
-  if (!renderHome._alerted && events.length) {
+  // Alerta de evento próximo — só dispara se o app já está visível na tela
+  const appVisible = !document.getElementById('app').classList.contains('hidden');
+  if (appVisible && !renderHome._alerted && events.length) {
     renderHome._alerted = true;
-    setTimeout(calendarAlert, 1500); // delay para o app terminar de carregar
+    setTimeout(calendarAlert, 1500);
   }
 
   const sorted = [...filtered].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
