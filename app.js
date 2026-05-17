@@ -4,10 +4,10 @@
 ═══════════════════════════════════════════════════ */
 
 // ─── CONFIGURE SEU SUPABASE AQUI ────────────────────
-const SUPABASE_URL  = 'https://ghcishjqgycpflwgaxwv.supabase.co';
-const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdoY2lzaGpxZ3ljcGZsd2dheHd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2NTQwNzYsImV4cCI6MjA5MzIzMDA3Nn0.YHx6ZLj3yQm1Hul_bzbMXVJjnB1ebZ4Z3YRrlg5vyOE';
+const SUPABASE_URL  = 'https://SEU_PROJECT.supabase.co';
+const SUPABASE_KEY  = 'SUA_ANON_KEY';
 // E-mail do super-administrador (você). Pode adicionar mais separando por vírgula.
-const SUPER_ADMINS  = ['cairiguedes77@gmail.com'];
+const SUPER_ADMINS  = ['seu@email.com'];
 // ────────────────────────────────────────────────────
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -867,7 +867,32 @@ async function oficializarCalc(){
   const ginId=document.getElementById('calc-gin-select').value,g=ginById(ginId);if(!g||!calcSimResult.length)return showToast('Nada para oficializar!','error');const btn=document.getElementById('btn-calc-oficializar');btn.disabled=true;btn.textContent='⏳ Salvando...';
   const launchedByName = currentProfile?.username || currentProfile?.name || currentProfile?.email || '';
   const launchedById   = currentProfile?.id || null;
-  let erros=0;for(const r of calcSimResult){const{error}=await sb.from('entries').insert({team_id:r.teamId,gin_id:ginId,points:r.pts,descricao:`Calculadora — ${g.name} — ${r.pos}º lugar`,data_entry:today(),tipo:'bonus',completion_time:r.time||null,launched_by_id:launchedById,launched_by_name:launchedByName});if(error){console.error(error);erros++;}}btn.disabled=false;btn.textContent='✅ Oficializar Resultados';if(erros>0){showToast(`${erros} erro(s) ao salvar.`,'error');}else{showToast(`${calcSimResult.length} lançamentos oficializados! 🎉`,'success');calcSimResult=[];document.getElementById('calc-result').classList.add('hidden');document.getElementById('calc-gin-select').value='';document.getElementById('calc-type-badge').classList.add('hidden');document.getElementById('calc-teams-area').innerHTML='';document.getElementById('calc-actions').style.display='none';}
+  let erros=0;
+  for(const r of calcSimResult){
+    const{error}=await sb.from('entries').insert({
+      team_id:r.teamId, gin_id:ginId, points:r.pts,
+      descricao:`Calculadora — ${g.name} — ${r.pos}º lugar`,
+      data_entry:today(), tipo:'bonus',
+      completion_time:r.time||null,
+      launched_by_id:launchedById, launched_by_name:launchedByName
+    });
+    if(error){console.error(error);erros++;}
+  }
+  btn.disabled=false; btn.textContent='✅ Oficializar Resultados';
+  if(erros>0){
+    showToast(`${erros} erro(s) ao salvar.`,'error');
+  } else {
+    showToast(`${calcSimResult.length} lançamentos oficializados! 🎉`,'success');
+    calcSimResult=[];
+    document.getElementById('calc-result').classList.add('hidden');
+    document.getElementById('calc-gin-select').value='';
+    document.getElementById('calc-type-badge').classList.add('hidden');
+    document.getElementById('calc-teams-area').innerHTML='';
+    document.getElementById('calc-actions').style.display='none';
+    // Força reload imediato para atualizar ranking sem depender do Realtime
+    await loadEntries();
+    renderAll();
+  }
 }
 
 // ─── ENTRY EDIT/DELETE ───────────────────────────────
@@ -1255,6 +1280,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Modais score / punição ──
   const openScoreModal = () => {
+    populateSelects(); // garante equipes sempre atualizadas ao abrir
     document.getElementById('score-pts').value='';
     document.getElementById('score-desc').value='';
     document.getElementById('score-date').value=today();
@@ -1270,6 +1296,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('fab-score').addEventListener('click', openScoreModal);
 
   const openPunModal = () => {
+    populateSelects(); // garante equipes sempre atualizadas ao abrir
     document.getElementById('pun-pts').value='';
     document.getElementById('pun-desc').value='';
     document.getElementById('pun-date').value=today();
