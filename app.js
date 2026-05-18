@@ -297,12 +297,11 @@ function applyRoleUI() {
 }
 
 // ─── TELAS DE AUTH ──────────────────────────────────
-function showAuthScreen()   { hideAllScreens(); document.getElementById('auth-screen').classList.remove('hidden'); }
-function showPendingScreen() { hideAllScreens(); document.getElementById('pending-screen').classList.remove('hidden'); }
+function showAuthScreen()    { hideAllScreens(); document.getElementById('auth-screen').classList.remove('hidden'); document.body.classList.add('auth-active'); }
+function showPendingScreen() { hideAllScreens(); document.getElementById('pending-screen').classList.remove('hidden'); document.body.classList.add('auth-active'); }
 function hideAllScreens() {
-  ['auth-screen','pending-screen'].forEach(id => {
-    document.getElementById(id).classList.add('hidden');
-  });
+  ['auth-screen','pending-screen'].forEach(id => document.getElementById(id).classList.add('hidden'));
+  document.body.classList.remove('auth-active');
 }
 function hideSplash() {
   const s = document.getElementById('splash');
@@ -407,7 +406,8 @@ function populateMyProfile() {
 
 async function doLogout() {
   if (pendingWatcher) { clearInterval(pendingWatcher); pendingWatcher = null; }
-  renderHome._alerted = false; // reseta alerta para próxima sessão
+  if (_realtimeChannel) { sb.removeChannel(_realtimeChannel); _realtimeChannel = null; }
+  renderHome._alerted = false;
   await sb.auth.signOut();
   currentUser = null; currentProfile = null; isGuest = false;
   document.body.classList.remove('is-admin');
@@ -531,8 +531,11 @@ async function loadEvents() {
   events = data || [];
 }
 
+let _realtimeChannel = null;
 function subscribeRealtime() {
-  sb.channel('ejc-realtime')
+  // Evita criar canais duplicados
+  if (_realtimeChannel) return;
+  _realtimeChannel = sb.channel('ejc-realtime')
     .on('postgres_changes', { event:'*', schema:'public', table:'teams' },    async () => { await loadTeams();    renderAll(); })
     .on('postgres_changes', { event:'*', schema:'public', table:'entries' },  async () => { await loadEntries();  renderAll(); })
     .on('postgres_changes', { event:'*', schema:'public', table:'gincanas' }, async () => { await loadGincanas(); renderAll(); })
@@ -850,7 +853,29 @@ function startEditGin(id){const g=gincanas.find(x=>x.id===id);if(!g)return;editi
 function cancelEditGin(){editingGinId=null;document.getElementById('gin-name-input').value='';document.getElementById('gin-date-input').value=today();document.getElementById('gin-maxpts-input').value='';document.getElementById('gin-obs-input').value='';document.getElementById('gin-scoring-type').value='points';document.querySelectorAll('.scoring-btn').forEach(b=>b.classList.remove('active'));document.getElementById('gin-type-points').classList.add('active');document.getElementById('gin-form-title').textContent='✨ Nova Gincana';document.getElementById('gin-form-title').classList.remove('editing-mode');document.getElementById('gin-form-card').classList.remove('editing');document.getElementById('btn-gin-save').textContent='+ Criar Gincana';document.getElementById('btn-gin-save').classList.remove('blue-mode');document.getElementById('btn-gin-cancel').style.display='none';}
 async function saveGincana(){
   if(!requireAdmin())return;
-  const name=document.getElementById('gin-name-input').value.trim(),date=document.getElementById('gin-date-input').value,maxPts=document.getElementById('gin-maxpts-input').value,obs=document.getElementById('gin-obs-input').value.trim(),scoringType=document.getElementById('gin-scoring-type').value||'points';if(!name)return showToast('Digite o nome!','error');const payload={name,data_gin:date||null,max_pts:maxPts?Number(maxPts):null,obs:obs||null,scoring_type:scoringType};if(editingGinId){const{error}=await sb.from('gincanas').update(payload).eq('id',editingGinId);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`"${name}" atualizada! ✅`,'success');cancelEditGin();}else{const{error}=await sb.from('gincanas').insert(payload);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`Gincana "${name}" criada! 🎯`,'success');document.getElementById('gin-name-input').value='';document.getElementById('gin-maxpts-input').value='';document.getElementById('gin-obs-input').value='';}
+  const name=document.getElementById('gin-name-input').value.trim(),
+        date=document.getElementById('gin-date-input').value,
+        maxPts=document.getElementById('gin-maxpts-input').value,
+        obs=document.getElementById('gin-obs-input').value.trim(),
+        scoringType=document.getElementById('gin-scoring-type').value||'points';
+  if(!name)return showToast('Digite o nome!','error');
+  const payload={name,data_gin:date||null,max_pts:maxPts?Number(maxPts):null,obs:obs||null,scoring_type:scoringType};
+  if(editingGinId){
+    const{error}=await sb.from('gincanas').update(payload).eq('id',editingGinId);
+    if(error){console.error(error);return showToast('Erro: '+error.message,'error');}
+    showToast(`"${name}" atualizada! ✅`,'success');
+    cancelEditGin();
+  } else {
+    const{error}=await sb.from('gincanas').insert(payload);
+    if(error){console.error(error);return showToast('Erro: '+error.message,'error');}
+    showToast(`Gincana "${name}" criada! 🎯`,'success');
+    document.getElementById('gin-name-input').value='';
+    document.getElementById('gin-maxpts-input').value='';
+    document.getElementById('gin-obs-input').value='';
+  }
+  // Força reload imediato sem depender do Realtime
+  await loadGincanas();
+  renderAll();
 }
 function confirmDeleteGin(id){if(!requireAdmin())return;const g=gincanas.find(x=>x.id===id);if(!g)return;const n=entries.filter(e=>e.gin_id===id).length;document.getElementById('confirm-title').textContent='Excluir Gincana';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(g.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteGincana(id);openModal('modal-confirm');}
 async function deleteGincana(id){const{error}=await sb.from('gincanas').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}if(editingGinId===id)cancelEditGin();showToast('Gincana excluída.','info');}
@@ -922,7 +947,10 @@ async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}){
     launched_by_name: launchedByName
   };
   const{error}=await sb.from('entries').insert(payload);
-  if(error){console.error(error);showToast('Erro: '+error.message,'error');}
+  if(error){console.error(error);showToast('Erro: '+error.message,'error');return;}
+  // Força reload imediato para aparecer no ranking sem depender do Realtime
+  await loadEntries();
+  renderAll();
 }
 
 // ════════════════════════════════════════════════════
@@ -1206,6 +1234,8 @@ function showToast(msg,type=''){const t=document.getElementById('toast');if(!t)r
 
 // ─── EVENTS ──────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // Bloqueia scroll enquanto splash está ativa
+  document.body.classList.add('auth-active');
 
   document.getElementById('gin-date-input').value = today();
 

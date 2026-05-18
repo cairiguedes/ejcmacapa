@@ -32,6 +32,11 @@ body {
   min-height: 100dvh; overflow-x: hidden;
   -webkit-tap-highlight-color: transparent;
 }
+/* Impede scroll que revela o app por baixo da tela de auth/splash no mobile */
+body.auth-active {
+  overflow: hidden;
+  height: 100dvh;
+}
 .hidden { display: none !important; }
 
 /* ── SPLASH ── */
