@@ -533,14 +533,25 @@ async function loadEvents() {
 
 let _realtimeChannel = null;
 function subscribeRealtime() {
-  // Evita criar canais duplicados
   if (_realtimeChannel) return;
   _realtimeChannel = sb.channel('ejc-realtime')
-    .on('postgres_changes', { event:'*', schema:'public', table:'teams' },    async () => { await loadTeams();    renderAll(); })
-    .on('postgres_changes', { event:'*', schema:'public', table:'entries' },  async () => { await loadEntries();  renderAll(); })
-    .on('postgres_changes', { event:'*', schema:'public', table:'gincanas' }, async () => { await loadGincanas(); renderAll(); })
-    .on('postgres_changes', { event:'*', schema:'public', table:'events' },   async () => { await loadEvents();   renderCalendar(); })
-    .on('postgres_changes', { event:'*', schema:'public', table:'profiles' }, async () => { await loadProfiles(); renderAdminPanel(); })
+    // Equipes e eventos ainda usam Realtime (alterações de outros admins)
+    .on('postgres_changes', { event:'*', schema:'public', table:'teams' }, async () => {
+      await loadTeams(); renderEquipesTab(); populateSelects(); renderRanking(); renderHome();
+    })
+    .on('postgres_changes', { event:'*', schema:'public', table:'gincanas' }, async () => {
+      await loadGincanas(); renderGincanasTab(); renderCalcTab(); populateSelects();
+    })
+    .on('postgres_changes', { event:'*', schema:'public', table:'events' }, async () => {
+      await loadEvents(); renderCalendar();
+    })
+    .on('postgres_changes', { event:'*', schema:'public', table:'profiles' }, async () => {
+      await loadProfiles(); renderAdminPanel();
+    })
+    // entries usa realtime só para sincronizar entre dispositivos diferentes
+    .on('postgres_changes', { event:'*', schema:'public', table:'entries' }, async () => {
+      await loadEntries(); renderHome(); renderRanking(); renderHistory();
+    })
     .subscribe();
 }
 
@@ -842,10 +853,37 @@ function startEditTeam(id){const t=teams.find(x=>x.id===id);if(!t)return;editing
 function cancelEditTeam(){editingTeamId=null;document.getElementById('team-name-input').value='';document.getElementById('team-color-input').value='#f59e0b';document.getElementById('team-form-title').textContent='✨ Nova Equipe';document.getElementById('team-form-title').classList.remove('editing-mode');document.getElementById('team-form-card').classList.remove('editing');document.getElementById('btn-team-save').textContent='+ Adicionar Equipe';document.getElementById('btn-team-save').classList.remove('blue-mode');document.getElementById('btn-team-cancel').style.display='none';}
 async function saveTeam(){
   if (!requireAdmin()) return;
-  const name=document.getElementById('team-name-input').value.trim(),color=document.getElementById('team-color-input').value;if(!name)return showToast('Digite o nome!','error');const dup=teams.find(t=>t.name.toLowerCase()===name.toLowerCase()&&t.id!==editingTeamId);if(dup)return showToast('Nome já existe!','error');if(editingTeamId){const{error}=await sb.from('teams').update({name,color}).eq('id',editingTeamId);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`"${name}" atualizada! ✅`,'success');cancelEditTeam();}else{const{error}=await sb.from('teams').insert({name,color});if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast(`Equipe "${name}" criada! 🙌`,'success');document.getElementById('team-name-input').value='';}
+  const name=document.getElementById('team-name-input').value.trim(),color=document.getElementById('team-color-input').value;
+  if(!name)return showToast('Digite o nome!','error');
+  const dup=teams.find(t=>t.name.toLowerCase()===name.toLowerCase()&&t.id!==editingTeamId);
+  if(dup)return showToast('Nome já existe!','error');
+  if(editingTeamId){
+    const{error}=await sb.from('teams').update({name,color}).eq('id',editingTeamId);
+    if(error){console.error(error);return showToast('Erro: '+error.message,'error');}
+    showToast(`"${name}" atualizada! ✅`,'success');
+    cancelEditTeam();
+  } else {
+    const{error}=await sb.from('teams').insert({name,color});
+    if(error){console.error(error);return showToast('Erro: '+error.message,'error');}
+    showToast(`Equipe "${name}" criada! 🙌`,'success');
+    document.getElementById('team-name-input').value='';
+  }
+  await loadTeams();
+  renderEquipesTab();
+  renderTop3(calcRanking(getFilteredEntries()));
+  populateSelects();
 }
 function confirmDeleteTeam(id){if(!requireAdmin())return;const t=teams.find(x=>x.id===id);if(!t)return;const n=entries.filter(e=>e.team_id===id).length;document.getElementById('confirm-title').textContent='Excluir Equipe';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(t.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteTeam(id);openModal('modal-confirm');}
-async function deleteTeam(id){const{error}=await sb.from('teams').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}if(editingTeamId===id)cancelEditTeam();showToast('Equipe excluída.','info');}
+async function deleteTeam(id){
+  const{error}=await sb.from('teams').delete().eq('id',id);
+  if(error){console.error(error);return showToast('Erro: '+error.message,'error');}
+  if(editingTeamId===id) cancelEditTeam();
+  showToast('Equipe excluída.','info');
+  await loadTeams();
+  renderEquipesTab();
+  renderTop3(calcRanking(getFilteredEntries()));
+  populateSelects();
+}
 
 // ─── GINCANAS CRUD ───────────────────────────────────
 function renderGincanasTab(){const list=document.getElementById('gincanas-list'),count=document.getElementById('gincanas-count');count.textContent=gincanas.length||'';if(!gincanas.length){list.innerHTML=`<div class="empty-state"><span class="empty-icon">🎯</span>Nenhuma gincana.</div>`;return;}list.innerHTML=gincanas.map(g=>{const hasObs=g.obs&&g.obs.trim().length>0;return`<div class="gin-entity-item"><div class="gin-entity-header"><span class="gin-entity-name">🎯 ${escHtml(g.name)}</span><div class="entity-actions"><button class="btn-edit" data-edit-gin="${g.id}">✏️</button><button class="btn-delete" data-del-gin="${g.id}">🗑</button></div></div><div class="gin-entity-meta">${g.data_gin?`<span class="gin-entity-date">📅 ${fmtDate(g.data_gin)}</span>`:''}${g.max_pts?`<span class="gin-entity-maxpts">${g.max_pts} pts máx.</span>`:''}${g.scoring_type?`<span class="gin-entity-maxpts">${g.scoring_type==='time'?'⏱ TEMPO':'🏅 PONTOS'}</span>`:''}</div>${hasObs?`<div class="gin-entity-obs-preview">${escHtml(g.obs)}</div><button class="gin-see-more" data-view-gin="${g.id}">Ver dinâmica →</button>`:''}</div>`;}).join('');list.querySelectorAll('[data-edit-gin]').forEach(btn=>btn.addEventListener('click',()=>startEditGin(btn.dataset.editGin)));list.querySelectorAll('[data-del-gin]').forEach(btn=>btn.addEventListener('click',()=>confirmDeleteGin(btn.dataset.delGin)));list.querySelectorAll('[data-view-gin]').forEach(btn=>btn.addEventListener('click',()=>viewGinDetail(btn.dataset.viewGin)));}
@@ -873,12 +911,23 @@ async function saveGincana(){
     document.getElementById('gin-maxpts-input').value='';
     document.getElementById('gin-obs-input').value='';
   }
-  // Força reload imediato sem depender do Realtime
+  // Atualiza só as partes afetadas sem renderAll completo
   await loadGincanas();
-  renderAll();
+  renderGincanasTab();
+  renderCalcTab();
+  populateSelects();
 }
 function confirmDeleteGin(id){if(!requireAdmin())return;const g=gincanas.find(x=>x.id===id);if(!g)return;const n=entries.filter(e=>e.gin_id===id).length;document.getElementById('confirm-title').textContent='Excluir Gincana';document.getElementById('confirm-message').innerHTML=`Excluir <strong>${escHtml(g.name)}</strong>?`+(n>0?`<br><br>⚠️ <strong>${n} lançamentos</strong> vinculados não serão apagados.`:'');confirmCallback=()=>deleteGincana(id);openModal('modal-confirm');}
-async function deleteGincana(id){const{error}=await sb.from('gincanas').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}if(editingGinId===id)cancelEditGin();showToast('Gincana excluída.','info');}
+async function deleteGincana(id){
+  const{error}=await sb.from('gincanas').delete().eq('id',id);
+  if(error){console.error(error);return showToast('Erro: '+error.message,'error');}
+  if(editingGinId===id) cancelEditGin();
+  showToast('Gincana excluída.','info');
+  await loadGincanas();
+  renderGincanasTab();
+  renderCalcTab();
+  populateSelects();
+}
 function viewGinDetail(id){const g=gincanas.find(x=>x.id===id);if(!g)return;document.getElementById('gin-detail-title').textContent=`🎯 ${g.name}`;document.getElementById('gin-detail-body').innerHTML=`<div class="gin-detail-meta">${g.data_gin?`<span class="gin-detail-chip">📅 ${fmtDate(g.data_gin)}</span>`:''}${g.max_pts?`<span class="gin-detail-chip">🏅 ${g.max_pts} pts</span>`:''}${g.scoring_type?`<span class="gin-detail-chip">${g.scoring_type==='time'?'⏱ TEMPO':'🏅 PONTOS'}</span>`:''}</div>${g.obs?`<div class="gin-detail-obs-label">📝 Dinâmica</div><div class="gin-detail-obs">${escHtml(g.obs)}</div>`:'<p style="color:var(--muted)">Sem observações.</p>'}`;openModal('modal-gin-detail');}
 
 // ─── CALCULADORA ─────────────────────────────────────
@@ -914,20 +963,76 @@ async function oficializarCalc(){
     document.getElementById('calc-type-badge').classList.add('hidden');
     document.getElementById('calc-teams-area').innerHTML='';
     document.getElementById('calc-actions').style.display='none';
-    // Força reload imediato para atualizar ranking sem depender do Realtime
+    // Atualiza só as partes afetadas
     await loadEntries();
-    renderAll();
+    renderHome();
+    renderRanking();
+    renderHistory();
   }
 }
 
 // ─── ENTRY EDIT/DELETE ───────────────────────────────
 function openEditEntry(id){const e=entries.find(x=>x.id===id);if(!e)return;const teamOpts=teams.map(t=>`<option value="${t.id}" ${t.id===e.team_id?'selected':''}>${escHtml(t.name)}</option>`).join('');const ginOpts=gincanas.map(g=>`<option value="${g.id}" ${g.id===e.gin_id?'selected':''}>${escHtml(g.name)}</option>`).join('');document.getElementById('edit-entry-id').value=e.id;document.getElementById('edit-entry-team').innerHTML='<option value="">— selecione —</option>'+teamOpts;document.getElementById('edit-entry-gin').innerHTML='<option value="">— nenhuma —</option>'+ginOpts;document.getElementById('edit-entry-pts').value=e.points;document.getElementById('edit-entry-desc').value=e.descricao||'';document.getElementById('edit-entry-date').value=e.data_entry;if(e.completion_time){const parts=e.completion_time.split(':');document.getElementById('edit-time-min').value=parts[0]||'';document.getElementById('edit-time-sec').value=parts[1]||'';document.getElementById('edit-time-ms').value=parts[2]||'';}else{document.getElementById('edit-time-min').value='';document.getElementById('edit-time-sec').value='';document.getElementById('edit-time-ms').value='';}const box=document.getElementById('modal-edit-entry').querySelector('.modal-box');if(e.tipo==='punishment'){box.classList.add('punishment-box');document.getElementById('edit-entry-modal-title').textContent='⚠️ Editar Punição';}else{box.classList.remove('punishment-box');document.getElementById('edit-entry-modal-title').textContent='✏️ Editar Lançamento';}openModal('modal-edit-entry');}
 async function saveEditEntry(){
-  if(!requireAdmin())return;
-  const id=document.getElementById('edit-entry-id').value,team_id=document.getElementById('edit-entry-team').value,gin_id=document.getElementById('edit-entry-gin').value,points=Number(document.getElementById('edit-entry-pts').value),descricao=document.getElementById('edit-entry-desc').value.trim(),data_entry=document.getElementById('edit-entry-date').value;const min=document.getElementById('edit-time-min').value,sec=document.getElementById('edit-time-sec').value,ms=document.getElementById('edit-time-ms').value;const completionTime=(min||sec||ms)?`${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`:null;if(!team_id)return showToast('Selecione uma equipe!','error');if(!points||isNaN(points))return showToast('Informe a pontuação!','error');if(!data_entry)return showToast('Informe a data!','error');const entry=entries.find(x=>x.id===id);const tipo=entry?.tipo||(points<0?'punishment':'bonus');const{error}=await sb.from('entries').update({team_id,gin_id:gin_id||null,points,descricao,data_entry,tipo,completion_time:completionTime||null}).eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}closeModal('modal-edit-entry');showToast('Lançamento atualizado! ✅','success');
+  if(!requireAdmin()) return;
+  const id         = document.getElementById('edit-entry-id').value;
+  const team_id    = document.getElementById('edit-entry-team').value;
+  const gin_id     = document.getElementById('edit-entry-gin').value;
+  const points     = Number(document.getElementById('edit-entry-pts').value);
+  const descricao  = document.getElementById('edit-entry-desc').value.trim();
+  const data_entry = document.getElementById('edit-entry-date').value;
+  const min = document.getElementById('edit-time-min').value;
+  const sec = document.getElementById('edit-time-sec').value;
+  const ms  = document.getElementById('edit-time-ms').value;
+  const completionTime = (min||sec||ms)
+    ? `${(min||'00').padStart(2,'0')}:${(sec||'00').padStart(2,'0')}:${(ms||'00').padStart(2,'0')}`
+    : null;
+
+  if(!team_id)  return showToast('Selecione uma equipe!','error');
+  if(!points||isNaN(points)) return showToast('Informe a pontuação!','error');
+  if(!data_entry) return showToast('Informe a data!','error');
+
+  const entry = entries.find(x=>x.id===id);
+  const tipo  = entry?.tipo||(points<0?'punishment':'bonus');
+
+  const{error}=await sb.from('entries').update({
+    team_id, gin_id:gin_id||null, points, descricao,
+    data_entry, tipo, completion_time:completionTime||null
+  }).eq('id',id);
+
+  if(error){ console.error(error); return showToast('Erro: '+error.message,'error'); }
+
+  closeModal('modal-edit-entry');
+  showToast('Lançamento atualizado! ✅','success');
+  // Atualiza dados sem reload de página
+  await loadEntries();
+  renderHistory();
+  renderHome();
+  renderRanking();
 }
-function confirmDeleteEntry(id){if(!requireAdmin())return;const e=entries.find(x=>x.id===id);if(!e)return;const team=teamById(e.team_id);document.getElementById('confirm-title').textContent='Excluir Lançamento';document.getElementById('confirm-message').innerHTML=`Excluir lançamento de <strong>${e.points>0?'+':''}${e.points} pts</strong> para <strong>${escHtml(team?.name||'?')}</strong> em <strong>${fmtDate(e.data_entry)}</strong>?<br><br>⚠️ Ação <strong>não pode ser desfeita</strong>.`;confirmCallback=()=>deleteEntry(id);openModal('modal-confirm');}
-async function deleteEntry(id){const{error}=await sb.from('entries').delete().eq('id',id);if(error){console.error(error);return showToast('Erro: '+error.message,'error');}showToast('Lançamento excluído.','info');}
+
+function confirmDeleteEntry(id){
+  if(!requireAdmin()) return;
+  const e=entries.find(x=>x.id===id);
+  if(!e) return;
+  const team=teamById(e.team_id);
+  document.getElementById('confirm-title').textContent='Excluir Lançamento';
+  document.getElementById('confirm-message').innerHTML=
+    `Excluir lançamento de <strong>${e.points>0?'+':''}${e.points} pts</strong> para <strong>${escHtml(team?.name||'?')}</strong> em <strong>${fmtDate(e.data_entry)}</strong>?<br><br>⚠️ Ação <strong>não pode ser desfeita</strong>.`;
+  confirmCallback=()=>deleteEntry(id);
+  openModal('modal-confirm');
+}
+
+async function deleteEntry(id){
+  const{error}=await sb.from('entries').delete().eq('id',id);
+  if(error){ console.error(error); return showToast('Erro: '+error.message,'error'); }
+  showToast('Lançamento excluído.','info');
+  // Atualiza dados sem reload de página
+  await loadEntries();
+  renderHistory();
+  renderHome();
+  renderRanking();
+}
 
 // ─── ENTRY SAVE ──────────────────────────────────────
 async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}){
@@ -950,7 +1055,9 @@ async function saveEntry({teamId,ginId,points,desc,date,type,completionTime}){
   if(error){console.error(error);showToast('Erro: '+error.message,'error');return;}
   // Força reload imediato para aparecer no ranking sem depender do Realtime
   await loadEntries();
-  renderAll();
+  renderHome();
+  renderRanking();
+  renderHistory();
 }
 
 // ════════════════════════════════════════════════════
